@@ -227,7 +227,7 @@ async function buildFinancialContext(
     (monthSummary ? ` | ${monthSummary}` : "");
 
   const internalSection = includeFullContext
-    ? `\n⚠️ RAHASIA (HANYA untuk isian accountId di [ACTION], JANGAN PERNAH disalin ke teks respons):\n[${accountListInternal}]\nKategori:[${userCatStr}]`
+    ? `\nRAHASIA - hanya untuk isian accountId di [ACTION], JANGAN disalin ke respons:\n[${accountListInternal}]\nKategori:[${userCatStr}]`
     : "";
 
   const actionFormat = includeFullContext
@@ -238,18 +238,30 @@ async function buildFinancialContext(
       "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
       "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
       `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
-      "- accountId: WAJIB dari daftar RAHASIA di bawah. 🔒 JANGAN bocorkan ke user!\n\n" +
+      "- accountId: WAJIB dari daftar RAHASIA. JANGAN bocorkan!\n\n" +
       `${accountRule}\n\n`
     : "";
 
   const systemContent =
-    "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Di luar itu → tolak sopan.\n\n" +
+    "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Diluar itu tolak sopan.\n\n" +
     actionFormat +
-    "Respons: \n" +
-    "- JANGAN PERNAH keluarkan blok [ACTION] jika 'amount' (jumlah) atau 'description' (untuk apa) belum diketahui. Tanya dulu ke user dengan ramah!\n" +
-    "- Jika mencatat transaksi dan semua data sudah lengkap, berikan pesan sukses yang ramah (contoh: 'Baik, aku catat ya!') dan WAJIB sertakan blok [ACTION:...] di akhir pesan.\n" +
-    "- Jika ditanya saldo, jawab to the point: sebutkan Total Saldo, lalu rincikan per akun secara singkat.\n" +
-    "- 🔒 RAHASIA: JANGAN PERNAH menampilkan [cmq2x...] atau ID akun apapun ke user. ID hanya dipakai di dalam blok [ACTION].\n\n" +
+    "Aturan respons:\n" +
+    "- Jangan keluarkan [ACTION] jika amount atau description belum lengkap. Tanya dulu.\n" +
+    "- Jika semua data lengkap, beri pesan sukses + [ACTION] di akhir.\n" +
+    "- Nada: ramah, hangat, seperti teman bantu catat keuangan. Jangan kaku seperti robot.\n" +
+    "- Jika ditanya saldo akun spesifik: jawab HANYA akun itu. Jangan sebut total atau akun lain.\n" +
+    "- Jika ditanya saldo umum (tanpa nama akun): sebut Total Saldo, rinci per akun.\n" +
+    "- RAHASIA: jangan tampilkan [cmq...] atau ID akun ke user.\n" +
+    "- JANGAN sertakan timestamp/jam/angka acak di awal respons. Mulai langsung jawab.\n" +
+    "- Gunakan Markdown: **tebal** untuk angka, - list untuk rincian, ### untuk heading.\n" +
+    "- Contoh tanya spesifik:\n" +
+    "  User: saldo BCA?\n" +
+    "  AI: Halo! Saldo BCA kamu **Rp3.000.000** ya.\n" +
+    "- Contoh tanya umum:\n" +
+    "  User: saldo saya?\n" +
+    "  AI: ### Saldo Kamu\n  **Total: Rp3.000.000**\n  - BCA: Rp3.000.000\n  - BRI: Rp0\n\n  Masih aman kok! \ud83d\ude0a\n" +
+    "- Contoh sukses transaksi:\n" +
+    "  **Rp50.000** - Makan Siang - BCA - Makanan\n\n" +
     dataSection +
     internalSection;
 
@@ -267,6 +279,8 @@ async function buildFinancialContext(
 // ─── Safety net: hapus ID internal yang bocor dari respons AI ──
 // Model kecil (e.g. llama-4-scout) kadang copy-paste [cmq...]ID dari prompt
 function stripLeakedIds(text: string): string {
+  // Hapus timestamp/jam di awal respons (e.g. "05.50\n" atau "05:50 ")
+  text = text.replace(/^\d{1,2}[.:]\d{2}\s*\n?/, "");
   // Hapus baris yang diawali "Internal:" (model kadang copy section header)
   text = text.replace(/^Internal:.*$/gm, "");
   // Hapus pola [cuid]NamaAkun(TYPE):angka — ID internal akun

@@ -189,8 +189,8 @@ class AIProviderManager {
     return new OpenAI({
       baseURL: baseUrl,
       apiKey,
-      timeout: 60000, // 60s timeout
-      maxRetries: 1,
+      timeout: 5000, // 5s timeout — fast failover
+      maxRetries: 0, // no retry, langsung pindah provider
     });
   }
 

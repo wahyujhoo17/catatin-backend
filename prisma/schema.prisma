@@ -1,0 +1,217 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── AUTH & USERS ───────────────────────────────────────────────
+
+enum WorkspaceMode {
+  POS
+  PERSONAL
+}
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  phone           String?  @unique
+  password        String
+  name            String
+  mode            WorkspaceMode?
+  avatar          String?
+  customAiConfig  Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  otpCodes        OtpCode[]
+  sessions        Session[]
+  accounts        Account[]
+  transactions    Transaction[]
+  categories      Category[]
+  products        Product[]
+  customers       Customer[]
+  aiMessages      AiMessage[]
+  aiConversations AiConversation[]
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  code      String
+  type      String   // REGISTER, LOGIN, FORGOT_PASSWORD
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, type])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  refreshToken String   @unique
+  deviceInfo   String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ─── WALLET / ACCOUNTS ──────────────────────────────────────────
+
+enum AccountType {
+  CASH
+  BANK
+  E_WALLET
+}
+
+model Account {
+  id        String      @id @default(cuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id])
+  name      String
+  type      AccountType @default(CASH)
+  balance   Float       @default(0)
+  icon      String?
+  color     String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+// ─── TRANSACTIONS ───────────────────────────────────────────────
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  DEBT
+  DEBT_PAYMENT
+}
+
+model Transaction {
+  id          String          @id @default(cuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  accountId   String?
+  account     Account?        @relation(fields: [accountId], references: [id])
+  categoryId  String?
+  category    Category?       @relation(fields: [categoryId], references: [id])
+  customerId  String?
+  customer    Customer?       @relation(fields: [customerId], references: [id])
+  type        TransactionType
+  amount      Float
+  description String?
+  note        String?
+  method      String?         // cash, debit_card, credit_card, e_wallet
+  source      String?         // CHAT, SCAN, MANUAL
+  date        DateTime        @default(now())
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([userId, date])
+  @@index([userId, categoryId])
+  @@index([userId, customerId])
+}
+
+// ─── CATEGORIES ─────────────────────────────────────────────────
+
+model Category {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  icon      String?
+  color     String?
+  type      TransactionType // INCOME or EXPENSE
+  isDefault Boolean  @default(false)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  transactions Transaction[]
+
+  @@unique([userId, name])
+  @@index([userId, type])
+}
+
+// ─── POS: PRODUCTS ──────────────────────────────────────────────
+
+model Product {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  name        String
+  price       Float
+  costPrice   Float?
+  category    String?
+  unit        String   @default("pcs")
+  stock       Int      @default(0)
+  minStock    Int      @default(5)
+  image       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isActive])
+}
+
+// ─── POS: CUSTOMERS (for debt/kasbon tracking) ──────────────────
+
+model Customer {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  phone     String?
+  debt      Float    @default(0)
+  maxDebt   Float?
+  notes     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+// ─── AI ─────────────────────────────────────────────────────────
+
+model AiConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  title     String?
+  mode      String?  // POS or PERSONAL
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages AiMessage[]
+
+  @@index([userId])
+}
+
+model AiMessage {
+  id             String         @id @default(cuid())
+  conversationId String
+  conversation   AiConversation @relation(fields: [conversationId], references: [id])
+  userId         String
+  user           User           @relation(fields: [userId], references: [id])
+  role           String         // USER, ASSISTANT, SYSTEM
+  content        String
+  metadata       Json?          // Parsed transaction data, etc.
+  createdAt      DateTime       @default(now())
+
+  @@index([conversationId])
+  @@index([userId])
+}

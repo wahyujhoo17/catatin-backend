@@ -1,0 +1,787 @@
+import { Hono } from "hono";
+import { stream } from "hono/streaming";
+import prisma from "../lib/prisma";
+import { authMiddleware } from "../middleware/auth";
+import { aiManager } from "../lib/ai/providerManager";
+import type { ChatMessage } from "../lib/ai/types";
+
+const aiRoutes = new Hono();
+
+// ─── Types ────────────────────────────────────────────────────
+interface CustomProvider {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  model?: string;
+}
+
+// ─── Helper: Ambil custom AI config user dari database ────────
+async function getUserCustomProvider(
+  userId: string,
+): Promise<CustomProvider | null> {
+  try {
+    const dbUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { customAiConfig: true },
+    });
+    const config = dbUser?.customAiConfig as any;
+    if (config?.enabled && config?.apiKey) {
+      return {
+        provider: config.provider || "openai",
+        baseUrl: config.baseUrl || "https://api.openai.com/v1",
+        apiKey: config.apiKey,
+        model: config.model || undefined,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── All AI routes require auth ───────────────────────────────
+aiRoutes.use("*", authMiddleware);
+
+// ─── Shared: Kategori default untuk acuan AI ──────────────────
+const DEFAULT_EXPENSE_CATS = [
+  "Makanan",
+  "Minuman",
+  "Transportasi",
+  "Belanja",
+  "Hiburan",
+  "Kesehatan",
+  "Pendidikan",
+  "Tagihan",
+  "Pakaian",
+  "Rumah Tangga",
+  "Hadiah",
+  "Donasi",
+  "Langganan",
+  "Perjalanan",
+  "Lainnya",
+];
+const DEFAULT_INCOME_CATS = [
+  "Gaji",
+  "Bonus",
+  "Freelance",
+  "Investasi",
+  "Hadiah",
+  "Refund",
+  "Lainnya",
+];
+
+// ─── Shared: Bangun system prompt + data keuangan ─────────────
+interface FinancialContext {
+  systemPrompt: ChatMessage;
+  accounts: { id: string; name: string; type: string; balance: number }[];
+  categories: { name: string; type: string }[];
+}
+
+async function buildFinancialContext(
+  userId: string,
+): Promise<FinancialContext> {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const [accounts, categories, todayTx, todayAgg, monthAgg] = await Promise.all(
+    [
+      prisma.account.findMany({
+        where: { userId },
+        select: { id: true, name: true, type: true, balance: true },
+      }),
+      prisma.category.findMany({
+        where: { userId },
+        select: { name: true, type: true },
+        orderBy: { name: "asc" },
+      }),
+      prisma.transaction.findMany({
+        where: { userId, date: { gte: startOfDay } },
+        select: { type: true, amount: true, description: true },
+        orderBy: { date: "desc" },
+        take: 10,
+      }),
+      prisma.transaction.aggregate({
+        where: { userId, date: { gte: startOfDay }, type: "EXPENSE" },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      prisma.transaction.aggregate({
+        where: { userId, date: { gte: startOfMonth }, type: "EXPENSE" },
+        _sum: { amount: true },
+      }),
+    ],
+  );
+
+  const totalBalance = accounts.reduce((s, a) => s + a.balance, 0);
+
+  // ─── Data akun (internal dengan ID) ─────────────────────
+  const accountListInternal = accounts.length
+    ? accounts
+        .map(
+          (a) =>
+            `[${a.id}]${a.name}(${a.type}):${a.balance.toLocaleString("id-ID")}`,
+        )
+        .join("|")
+    : "nol";
+
+  // ─── Data akun (clean tanpa ID, untuk user) ─────────────
+  const accountListClean = accounts.length
+    ? accounts
+        .map((a) => `${a.name}(${a.type}):${a.balance.toLocaleString("id-ID")}`)
+        .join("|")
+    : "nol";
+
+  // ─── Ringkasan transaksi hari ini ───────────────────────
+  const todayExpense = todayAgg._sum?.amount || 0;
+  const todayCount = todayAgg._count || 0;
+  const todayInAgg = await prisma.transaction.aggregate({
+    where: { userId, date: { gte: startOfDay }, type: "INCOME" },
+    _sum: { amount: true },
+  });
+  const todayIncome = todayInAgg._sum?.amount || 0;
+
+  let todaySummary = `Hari ini: ${todayCount} tx`;
+  if (todayExpense > 0)
+    todaySummary += ` | keluar Rp${todayExpense.toLocaleString("id-ID")}`;
+  if (todayIncome > 0)
+    todaySummary += ` | masuk Rp${todayIncome.toLocaleString("id-ID")}`;
+  if (todayTx.length > 0) {
+    const recentItems = todayTx
+      .slice(0, 5)
+      .map(
+        (t) =>
+          (t.type === "EXPENSE" ? "-" : "+") + t.description + ":" + t.amount,
+      )
+      .join("|");
+    todaySummary += " | transaksi: " + recentItems;
+  }
+
+  // ─── Ringkasan bulan ini ────────────────────────────────
+  const monthExpense = monthAgg._sum?.amount || 0;
+  const monthSummary =
+    monthExpense > 0
+      ? `Bulan ini keluar: Rp${monthExpense.toLocaleString("id-ID")}`
+      : "";
+
+  // ─── Aturan akun ────────────────────────────────────────
+  let accountRule: string;
+  if (accounts.length === 0) {
+    accountRule =
+      "⚠️ Belum ada akun. JANGAN catat transaksi. Suruh user tambah akun dulu.";
+  } else if (accounts.length === 1) {
+    accountRule =
+      "✅ 1 akun: " +
+      accounts[0].name +
+      '. Auto-pakai accountId="' +
+      accounts[0].id +
+      '" untuk semua transaksi.';
+  } else {
+    accountRule =
+      "📋 " + accounts.length + " akun. TANYA dulu akun mana sebelum mencatat.";
+  }
+
+  // ─── Bangun prompt KOMPAK (hemat token) ─────────────────
+  const expCatStr = DEFAULT_EXPENSE_CATS.join(",");
+  const incCatStr = DEFAULT_INCOME_CATS.join(",");
+  const userCatStr = categories.length
+    ? categories.map((c) => `${c.name}(${c.type})`).join(",")
+    : "nol";
+
+  const systemContent =
+    "Kamu: Catetin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Di luar itu → tolak sopan.\n\n" +
+    "FORMAT mencatat transaksi:\n" +
+    '[ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan siang","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
+    "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
+    `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}]. Tidak cocok? Buat baru spesifik (misal: Bensin, Kopi). JANGAN pakai "Umum".\n` +
+    "- accountId: WAJIB dari daftar Internal. 🔒RAHASIA, jangan sebut ke user!\n\n" +
+    `${accountRule}\n\n` +
+    "Respons: 1-3 kalimat, Bahasa Indonesia santai, pakai emoji. JANGAN [ACTION] jika user hanya bertanya. 🔒 JANGAN bocorkan ID internal — sebut nama akun saja.\n\n" +
+    `DATA:\n` +
+    `Saldo: Rp${totalBalance.toLocaleString("id-ID")} | ${todaySummary}` +
+    (monthSummary ? ` | ${monthSummary}` : "") +
+    "\n" +
+    `Internal:[${accountListInternal}]\n` +
+    `Kategori:[${userCatStr}]`;
+
+  console.log(
+    `[AI] System prompt: ${systemContent.length} chars, ${systemContent.split(/\s+/).length} words`,
+  );
+
+  return {
+    systemPrompt: { role: "system", content: systemContent },
+    accounts,
+    categories,
+  };
+}
+async function callCustomProviderStream(
+  messages: ChatMessage[],
+  custom: CustomProvider,
+): Promise<AsyncGenerator<{ type: string; content?: string; error?: string }>> {
+  const baseUrl = custom.baseUrl.replace(/\/+$/, "");
+  const url = `${baseUrl}/chat/completions`;
+
+  // Convert messages format for OpenAI-compatible API
+  const body = JSON.stringify({
+    model: custom.model || "gpt-4o",
+    messages: messages.map((m) => {
+      if (typeof m.content === "string") {
+        return { role: m.role, content: m.content };
+      }
+      return {
+        role: m.role,
+        content: m.content.map((part) => {
+          if (part.type === "text")
+            return { type: "text", text: part.text || "" };
+          if (part.type === "image_url")
+            return { type: "image_url", image_url: part.image_url };
+          return { type: "text", text: "" };
+        }),
+      };
+    }),
+    stream: true,
+    max_tokens: 2048,
+    temperature: 0.7,
+  });
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${custom.apiKey}`,
+      "User-Agent": "Catetin/1.0",
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(
+      `Custom AI error ${response.status}: ${errorText.slice(0, 300)}`,
+    );
+  }
+
+  if (!response.body) {
+    throw new Error("Custom AI: no response body");
+  }
+
+  // Read SSE stream line by line
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  async function* generate() {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") return;
+
+        try {
+          const parsed = JSON.parse(data);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) {
+            yield { type: "token", content: delta };
+          }
+        } catch {
+          // Skip unparseable chunks
+        }
+      }
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return generate() as any;
+}
+
+async function callCustomProviderSync(
+  messages: ChatMessage[],
+  custom: CustomProvider,
+): Promise<string> {
+  const baseUrl = custom.baseUrl.replace(/\/+$/, "");
+  const url = `${baseUrl}/chat/completions`;
+
+  const body = JSON.stringify({
+    model: custom.model || "gpt-4o",
+    messages: messages.map((m) => {
+      if (typeof m.content === "string") {
+        return { role: m.role, content: m.content };
+      }
+      return {
+        role: m.role,
+        content: m.content.map((part) => {
+          if (part.type === "text")
+            return { type: "text", text: part.text || "" };
+          if (part.type === "image_url")
+            return { type: "image_url", image_url: part.image_url };
+          return { type: "text", text: "" };
+        }),
+      };
+    }),
+    stream: false,
+    max_tokens: 2048,
+    temperature: 0.7,
+  });
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${custom.apiKey}`,
+      "User-Agent": "Catetin/1.0",
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(
+      `Custom AI error ${response.status}: ${errorText.slice(0, 300)}`,
+    );
+  }
+
+  const json = (await response.json()) as any;
+  return json.choices?.[0]?.message?.content || "";
+}
+
+// ─── POST /api/ai/chat — Streaming chat ─────────────────────
+aiRoutes.post("/chat", async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json();
+  const { message, conversationId, image } = body;
+
+  if (!message || typeof message !== "string" || message.trim().length === 0) {
+    return c.json({ error: "Message is required" }, 400);
+  }
+
+  // ─── Ambil data keuangan + bangun system prompt ──────────
+  const ctx = await buildFinancialContext(user.userId);
+  const { systemPrompt, accounts, categories } = ctx;
+
+  const userMessage: ChatMessage = image
+    ? {
+        role: "user",
+        content: [
+          { type: "text", text: message },
+          { type: "image_url", image_url: { url: image } },
+        ],
+      }
+    : {
+        role: "user",
+        content: message,
+      };
+
+  const messages: ChatMessage[] = [systemPrompt, userMessage];
+
+  // ─── Simpan riwayat chat ke database ────────────────────────
+  const saveChatHistory = async (assistantContent: string) => {
+    try {
+      // Cari atau buat conversation
+      let convId = conversationId;
+      if (!convId) {
+        const title =
+          message.trim().slice(0, 60) + (message.length > 60 ? "…" : "");
+        const conv = await prisma.aiConversation.create({
+          data: {
+            userId: user.userId,
+            title,
+            mode: "chat",
+          },
+        });
+        convId = conv.id;
+      }
+
+      // Simpan user message
+      await prisma.aiMessage.create({
+        data: {
+          conversationId: convId,
+          userId: user.userId,
+          role: "user",
+          content: message.trim(),
+        },
+      });
+
+      // Simpan assistant response (stripped of action blocks)
+      if (assistantContent.trim()) {
+        await prisma.aiMessage.create({
+          data: {
+            conversationId: convId,
+            userId: user.userId,
+            role: "assistant",
+            content: stripActions(assistantContent),
+          },
+        });
+      }
+    } catch (dbErr) {
+      console.error("[AI] Gagal menyimpan chat history:", dbErr);
+    }
+  };
+
+  // ─── Parse & execute transaction actions ────────────────────
+  const processTransactionActions = async (content: string) => {
+    const actionRegex = /\[ACTION:record_transaction\]([\s\S]*?)\[\/ACTION\]/g;
+    let match;
+    const created: {
+      type: string;
+      amount: number;
+      description: string;
+      category: string;
+    }[] = [];
+
+    while ((match = actionRegex.exec(content)) !== null) {
+      try {
+        const parsed = JSON.parse(match[1].trim());
+        const {
+          type,
+          amount,
+          description,
+          category: catName,
+          accountId,
+        } = parsed;
+
+        if (!type || !amount || !description) continue;
+        if (!["INCOME", "EXPENSE"].includes(type)) continue;
+        if (typeof amount !== "number" || amount <= 0) continue;
+
+        // Validasi accountId jika diberikan
+        let finalAccountId: string | null = null;
+        if (accountId && typeof accountId === "string") {
+          const acc = accounts.find((a) => a.id === accountId);
+          if (acc) {
+            finalAccountId = acc.id;
+          } else {
+            console.warn(`[AI] accountId ${accountId} tidak valid, abaikan`);
+          }
+        }
+        // Jika user hanya punya 1 akun, auto-assign
+        if (!finalAccountId && accounts.length === 1) {
+          finalAccountId = accounts[0].id;
+        }
+
+        // Cari atau buat kategori
+        let categoryId: string | null = null;
+        if (catName) {
+          const existingCat = await prisma.category.findFirst({
+            where: { userId: user.userId, name: catName },
+          });
+          if (existingCat) {
+            categoryId = existingCat.id;
+          } else {
+            const newCat = await prisma.category.create({
+              data: {
+                userId: user.userId,
+                name: catName,
+                type: type as any,
+              },
+            });
+            categoryId = newCat.id;
+          }
+        }
+
+        // Buat transaksi
+        const tx = await prisma.transaction.create({
+          data: {
+            userId: user.userId,
+            type: type as any,
+            amount,
+            description,
+            categoryId,
+            accountId: finalAccountId,
+            source: "CHAT",
+            date: new Date(),
+          },
+        });
+
+        const accName =
+          accounts.find((a) => a.id === finalAccountId)?.name || "Umum";
+        console.log(
+          `[AI] Transaksi tercatat: ${type} Rp ${amount} — ${description} → ${accName}`,
+        );
+
+        created.push({
+          type,
+          amount,
+          description,
+          category: catName || "Umum",
+        });
+      } catch (parseErr) {
+        console.warn("[AI] Gagal parse action:", parseErr);
+      }
+    }
+
+    return created;
+  };
+
+  // ─── Strip [ACTION] blocks from response ────────────────────
+  function stripActions(content: string): string {
+    return content
+      .replace(/\[ACTION:record_transaction\][\s\S]*?\[\/ACTION\]/g, "")
+      .trim();
+  }
+
+  // ─── SSE Streaming Response ─────────────────────────────────
+  return stream(c, async (s) => {
+    let fullResponse = "";
+
+    try {
+      // Set SSE headers
+      c.header("Content-Type", "text/event-stream");
+      c.header("Cache-Control", "no-cache");
+      c.header("Connection", "keep-alive");
+
+      // ─── Cek custom AI dari database ─────────────────────
+      const customProvider = await getUserCustomProvider(user.userId);
+
+      // ─── Gunakan custom provider jika user mengaktifkannya ──
+      if (customProvider) {
+        console.log(
+          `[AI] Menggunakan custom AI: ${customProvider.provider}, model: ${customProvider.model || "default"}`,
+        );
+
+        const generator = await callCustomProviderStream(
+          messages,
+          customProvider,
+        );
+
+        for await (const event of generator) {
+          const data = JSON.stringify(event);
+          await s.write(`data: ${data}\n\n`);
+
+          if (event.type === "token" && event.content) {
+            fullResponse += event.content;
+          }
+
+          if (event.type === "error" || event.type === "done") {
+            break;
+          }
+        }
+      } else {
+        // ─── Default: gunakan Catetin AI (.env) dengan failover ──
+        const generator = aiManager.chatStream(messages, { vision: !!image });
+
+        for await (const event of generator) {
+          const data = JSON.stringify(event);
+          await s.write(`data: ${data}\n\n`);
+
+          if (event.type === "token" && event.content) {
+            fullResponse += event.content;
+          }
+
+          if (event.type === "error" || event.type === "done") {
+            break;
+          }
+        }
+      }
+
+      // ─── Proses transaksi dari respons AI ─────────────
+      if (fullResponse.trim()) {
+        const createdTxs = await processTransactionActions(fullResponse);
+
+        // Kirim event transaksi tercatat ke frontend
+        if (createdTxs.length > 0) {
+          for (const tx of createdTxs) {
+            await s.write(
+              `data: ${JSON.stringify({ type: "transaction_created", transaction: tx })}\n\n`,
+            );
+          }
+        }
+
+        await saveChatHistory(fullResponse);
+      }
+
+      await s.write("data: [DONE]\n\n");
+    } catch (err: any) {
+      // Simpan partial response jika ada error
+      if (fullResponse.trim()) {
+        await saveChatHistory(fullResponse);
+      }
+
+      const data = JSON.stringify({
+        type: "error",
+        error: err.message || "Internal server error",
+      });
+      await s.write(`data: ${data}\n\n`);
+      await s.write("data: [DONE]\n\n");
+    }
+  });
+});
+
+// ─── POST /api/ai/chat/sync — Non-streaming (fallback) ───────
+aiRoutes.post("/chat/sync", async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json();
+  const { message, image } = body;
+
+  if (!message || typeof message !== "string" || message.trim().length === 0) {
+    return c.json({ error: "Message is required" }, 400);
+  }
+
+  // ─── Ambil data keuangan + bangun system prompt ──────────
+  const ctx = await buildFinancialContext(user.userId);
+  const { systemPrompt, accounts } = ctx;
+
+  const userMessage: ChatMessage = image
+    ? {
+        role: "user",
+        content: [
+          { type: "text", text: message },
+          { type: "image_url", image_url: { url: image } },
+        ],
+      }
+    : { role: "user", content: message };
+
+  try {
+    // Cek custom AI dari database
+    const customProvider = await getUserCustomProvider(user.userId);
+    let content: string;
+
+    if (customProvider) {
+      // Gunakan custom AI user
+      content = await callCustomProviderSync(
+        [systemPrompt, userMessage],
+        customProvider,
+      );
+    } else {
+      // Default: Catetin AI (.env) dengan failover
+      const result = await aiManager.chat([systemPrompt, userMessage], {
+        vision: !!image,
+      });
+      content = result.content;
+    }
+
+    // ─── Parse & proses transaksi dari respons ────────────
+    const actionRegex = /\[ACTION:record_transaction\]([\s\S]*?)\[\/ACTION\]/g;
+    let match;
+    const createdTxs: {
+      type: string;
+      amount: number;
+      description: string;
+      category: string;
+    }[] = [];
+
+    while ((match = actionRegex.exec(content)) !== null) {
+      try {
+        const parsed = JSON.parse(match[1].trim());
+        const {
+          type,
+          amount,
+          description,
+          category: catName,
+          accountId,
+        } = parsed;
+        if (!type || !amount || !description) continue;
+        if (!["INCOME", "EXPENSE"].includes(type)) continue;
+
+        // Validasi accountId
+        let finalAccountId: string | null = null;
+        if (accountId && typeof accountId === "string") {
+          const acc = accounts.find((a) => a.id === accountId);
+          if (acc) finalAccountId = acc.id;
+        }
+        if (!finalAccountId && accounts.length === 1) {
+          finalAccountId = accounts[0].id;
+        }
+
+        let categoryId: string | null = null;
+        if (catName) {
+          const existingCat = await prisma.category.findFirst({
+            where: { userId: user.userId, name: catName },
+          });
+          if (existingCat) {
+            categoryId = existingCat.id;
+          } else {
+            const newCat = await prisma.category.create({
+              data: { userId: user.userId, name: catName, type: type as any },
+            });
+            categoryId = newCat.id;
+          }
+        }
+
+        const accName =
+          accounts.find((a) => a.id === finalAccountId)?.name || "Umum";
+        await prisma.transaction.create({
+          data: {
+            userId: user.userId,
+            type: type as any,
+            amount,
+            description,
+            categoryId,
+            accountId: finalAccountId,
+            source: "CHAT",
+            date: new Date(),
+          },
+        });
+
+        createdTxs.push({
+          type,
+          amount,
+          description,
+          category: catName || "Umum",
+        });
+      } catch {
+        // skip parse error
+      }
+    }
+
+    // Strip [ACTION] blocks dari content yang disimpan
+    const cleanContent = content
+      .replace(/\[ACTION:record_transaction\][\s\S]*?\[\/ACTION\]/g, "")
+      .trim();
+
+    // Simpan riwayat chat (sync)
+    try {
+      const title =
+        message.trim().slice(0, 60) + (message.length > 60 ? "…" : "");
+      const conv = await prisma.aiConversation.create({
+        data: { userId: user.userId, title, mode: "chat" },
+      });
+      await prisma.aiMessage.create({
+        data: {
+          conversationId: conv.id,
+          userId: user.userId,
+          role: "user",
+          content: message.trim(),
+        },
+      });
+      if (cleanContent.trim()) {
+        await prisma.aiMessage.create({
+          data: {
+            conversationId: conv.id,
+            userId: user.userId,
+            role: "assistant",
+            content: cleanContent,
+          },
+        });
+      }
+    } catch (dbErr) {
+      console.error("[AI] Gagal menyimpan chat history:", dbErr);
+    }
+
+    return c.json({
+      content: cleanContent,
+      transactions: createdTxs.length > 0 ? createdTxs : undefined,
+      provider: customProvider ? "custom" : "catetin",
+    });
+  } catch (err: any) {
+    return c.json({ error: err.message || "AI request failed" }, 503);
+  }
+});
+
+// ─── GET /api/ai/providers — Check provider status ──────────
+aiRoutes.get("/providers", async (c) => {
+  const user = c.get("user");
+  return c.json({
+    providers: ["deepseek", "openrouter", "groq"],
+    status: "ok",
+  });
+});
+
+export default aiRoutes;

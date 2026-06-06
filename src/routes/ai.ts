@@ -224,10 +224,11 @@ async function buildFinancialContext(
 
   const dataSection =
     `DATA:\nTotal Saldo: Rp${totalBalance.toLocaleString("id-ID")} | Rincian Akun: [${accountListClean}] | ${todaySummary}` +
-    (monthSummary ? ` | ${monthSummary}` : "") +
-    (includeFullContext
-      ? `\nInternal:[${accountListInternal}]\nKategori:[${userCatStr}]`
-      : "");
+    (monthSummary ? ` | ${monthSummary}` : "");
+
+  const internalSection = includeFullContext
+    ? `\n⚠️ RAHASIA (HANYA untuk isian accountId di [ACTION], JANGAN PERNAH disalin ke teks respons):\n[${accountListInternal}]\nKategori:[${userCatStr}]`
+    : "";
 
   const actionFormat = includeFullContext
     ? "FORMAT AKSI:\n" +
@@ -237,7 +238,7 @@ async function buildFinancialContext(
       "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
       "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
       `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
-      "- accountId: WAJIB dari daftar Internal. 🔒RAHASIA!\n\n" +
+      "- accountId: WAJIB dari daftar RAHASIA di bawah. 🔒 JANGAN bocorkan ke user!\n\n" +
       `${accountRule}\n\n`
     : "";
 
@@ -248,8 +249,9 @@ async function buildFinancialContext(
     "- JANGAN PERNAH keluarkan blok [ACTION] jika 'amount' (jumlah) atau 'description' (untuk apa) belum diketahui. Tanya dulu ke user dengan ramah!\n" +
     "- Jika mencatat transaksi dan semua data sudah lengkap, berikan pesan sukses yang ramah (contoh: 'Baik, aku catat ya!') dan WAJIB sertakan blok [ACTION:...] di akhir pesan.\n" +
     "- Jika ditanya saldo, jawab to the point: sebutkan Total Saldo, lalu rincikan per akun secara singkat.\n" +
-    "- 🔒 JANGAN bocorkan ID internal.\n\n" +
-    dataSection;
+    "- 🔒 RAHASIA: JANGAN PERNAH menampilkan [cmq2x...] atau ID akun apapun ke user. ID hanya dipakai di dalam blok [ACTION].\n\n" +
+    dataSection +
+    internalSection;
 
   console.log(
     `[AI] System prompt: ${systemContent.length} chars, ${systemContent.split(/\s+/).length} words`,
@@ -260,6 +262,20 @@ async function buildFinancialContext(
     accounts,
     categories,
   };
+}
+
+// ─── Safety net: hapus ID internal yang bocor dari respons AI ──
+// Model kecil (e.g. llama-4-scout) kadang copy-paste [cmq...]ID dari prompt
+function stripLeakedIds(text: string): string {
+  // Hapus baris yang diawali "Internal:" (model kadang copy section header)
+  text = text.replace(/^Internal:.*$/gm, "");
+  // Hapus pola [cuid]NamaAkun(TYPE):angka — ID internal akun
+  text = text.replace(/\[[a-z0-9]{20,}\]\w+\(\w+\):[\d.,]+/g, "");
+  // Hapus sisa [cuid] kosong
+  text = text.replace(/\[[a-z0-9]{20,}\]/g, "");
+  // Bersihkan multiple newline
+  text = text.replace(/\n{3,}/g, "\n\n");
+  return text.trim();
 }
 
 // ─── Fallback: inject [ASK_ACCOUNT:...] if AI forgot ──────────
@@ -555,6 +571,9 @@ aiRoutes.post("/chat", async (c) => {
         }
       }
 
+      // ─── Safety net: hapus ID internal yang mungkin bocor ──
+      fullResponse = stripLeakedIds(fullResponse);
+
       // ─── Fallback: inject [ASK_ACCOUNT:...] jika AI lupa ──
       const injectedTag = ensureAskAccount(fullResponse, accounts);
       if (injectedTag) {
@@ -648,6 +667,9 @@ aiRoutes.post("/chat/sync", async (c) => {
       });
       content = result.content;
     }
+
+    // ─── Safety net: hapus ID internal yang mungkin bocor ──
+    content = stripLeakedIds(content);
 
     // ─── Fallback: inject [ASK_ACCOUNT:...] jika AI lupa ──
     const injectedTag = ensureAskAccount(content, accounts);

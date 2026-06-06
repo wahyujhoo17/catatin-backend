@@ -22,8 +22,8 @@ const PROVIDER_DEFAULTS: Record<
     baseUrl: "https://api.deepseek.com",
   },
   openrouter: {
-    textModel: "google/gemini-2.5-flash",
-    visionModel: "google/gemini-2.5-flash",
+    textModel: "openrouter/free",
+    visionModel: "openrouter/free",
     baseUrl: "https://openrouter.ai/api/v1",
   },
   groq: {
@@ -38,13 +38,16 @@ const PROVIDER_DEFAULTS: Record<
   },
 };
 
-// Groq first (free/fast), then DeepSeek (cheap), then Gemini (free limit), then OpenRouter (fallback)
-const PROVIDER_ORDER: ProviderName[] = [
-  "groq",
-  "deepseek",
-  "gemini",
+// ─── Separate routing for text vs vision ───────────────────
+// Text priority  : OpenRouter (default) → Gemini → DeepSeek
+// Vision priority: Groq (dedicated KEY_3) → Gemini → OpenRouter
+const PROVIDER_ORDER_TEXT: ProviderName[] = [
   "openrouter",
+  "gemini",
+  "deepseek",
 ];
+
+const PROVIDER_ORDER_VISION: ProviderName[] = ["groq", "gemini", "openrouter"];
 
 // ─── Redis keys ───────────────────────────────────────────────
 function rateLimitKey(provider: string, keyIndex: number): string {
@@ -65,7 +68,10 @@ class AIProviderManager {
 
   // ─── Load providers from environment ────────────────────────
   private loadProviders() {
-    for (const name of PROVIDER_ORDER) {
+    const allProviders = [
+      ...new Set([...PROVIDER_ORDER_TEXT, ...PROVIDER_ORDER_VISION]),
+    ];
+    for (const name of allProviders) {
       const defaults = PROVIDER_DEFAULTS[name];
       const envPrefix = name.toUpperCase();
       const keys = loadKeysFromEnv(envPrefix, defaults.baseUrl);
@@ -207,7 +213,11 @@ class AIProviderManager {
 
     const errors: string[] = [];
 
-    for (const providerName of PROVIDER_ORDER) {
+    const providerOrder = options.vision
+      ? PROVIDER_ORDER_VISION
+      : PROVIDER_ORDER_TEXT;
+
+    for (const providerName of providerOrder) {
       const provider = this.providers.get(providerName);
       if (!provider) continue;
 
@@ -311,7 +321,11 @@ class AIProviderManager {
 
     let triedAnyProvider = false;
 
-    for (const providerName of PROVIDER_ORDER) {
+    const providerOrder = options.vision
+      ? PROVIDER_ORDER_VISION
+      : PROVIDER_ORDER_TEXT;
+
+    for (const providerName of providerOrder) {
       const provider = this.providers.get(providerName);
       if (!provider) continue;
 

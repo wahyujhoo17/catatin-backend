@@ -45,6 +45,7 @@ const PROVIDER_ORDER_TEXT: ProviderName[] = [
   "openrouter",
   "gemini",
   "deepseek",
+  "groq",
 ];
 
 const PROVIDER_ORDER_VISION: ProviderName[] = ["groq", "gemini", "openrouter"];

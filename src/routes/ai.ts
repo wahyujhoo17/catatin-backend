@@ -108,6 +108,7 @@ function isLikelyTransaction(message: string): boolean {
 async function buildFinancialContext(
   userId: string,
   includeFullContext: boolean = true,
+  draftMode: boolean = false
 ): Promise<FinancialContext> {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -207,12 +208,20 @@ async function buildFinancialContext(
       '" untuk semua transaksi.';
   } else {
     const accOptions = accounts.map((a) => a.name).join(",");
-    accountRule =
-      `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
-      `ATURAN PENTING: Jika user mencatat transaksi tapi tidak menyebutkan akun spesifik:\n` +
-      `1. JANGAN keluarkan blok [ACTION].\n` +
-      `2. Tanya ramah: misalnya "Pemasukan sebesar RpXXX akan dimasukkan ke dompet mana? Silakan pilih di bawah:"\n` +
-      `3. WAJIB akhiri pesan dengan tepat baris ini di baris tersendiri: [ASK_ACCOUNT:${accOptions}]`;
+    if (draftMode) {
+      accountRule =
+        `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
+        `ATURAN DRAFT:\n` +
+        `1. WAJIB SELALU keluarkan blok [ACTION:draft_transaction] di akhir pesan apapun yang terjadi.\n` +
+        `2. JIKA di struk tidak ada petunjuk dompet/akun, kosongkan accountId ("") DAN tambahkan baris ini di akhir pesan: [ASK_ACCOUNT:${accOptions}]`;
+    } else {
+      accountRule =
+        `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
+        `ATURAN PENTING: Jika user mencatat transaksi tapi tidak menyebutkan akun spesifik:\n` +
+        `1. JANGAN keluarkan blok [ACTION].\n` +
+        `2. Tanya ramah: misalnya "Pemasukan sebesar RpXXX akan dimasukkan ke dompet mana? Silakan pilih di bawah:"\n` +
+        `3. WAJIB akhiri pesan dengan tepat baris ini di baris tersendiri: [ASK_ACCOUNT:${accOptions}]`;
+    }
   }
 
   // ─── Bangun prompt KOMPAK (hemat token) ─────────────────
@@ -230,23 +239,30 @@ async function buildFinancialContext(
     ? `\nRAHASIA - hanya untuk isian accountId di [ACTION], JANGAN disalin ke respons:\n[${accountListInternal}]\nKategori:[${userCatStr}]`
     : "";
 
-  const actionFormat = includeFullContext
-    ? "FORMAT AKSI:\n" +
-      '1. Mencatat: [ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
+  let actionFormat = "";
+  if (includeFullContext) {
+    actionFormat = "FORMAT AKSI:\n";
+    if (draftMode) {
+      actionFormat += '1. Draft Transaksi (WAJIB ADA): [ACTION:draft_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan","category":"Makanan","accountId":"<id_atau_kosong>"}[/ACTION]\n' +
+      "- Tentukan mandiri (biasanya pengeluaran). Jika struk ada info bank, otomatis pilih accountId.\n";
+    } else {
+      actionFormat += '1. Mencatat: [ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
       '2. Menghapus: [ACTION:delete_transaction]{"id":"<id_transaksi_dari_data>"}[/ACTION]\n' +
-      '3. Mengubah: [ACTION:update_transaction]{"id":"<id>","amount":60000,"description":"Makan besar"}[/ACTION]\n' +
-      "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
+      '3. Mengubah: [ACTION:update_transaction]{"id":"<id>","amount":60000,"description":"Makan besar"}[/ACTION]\n';
+    }
+    actionFormat += "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
       "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
       `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
-      "- accountId: WAJIB dari daftar RAHASIA. JANGAN bocorkan!\n\n" +
-      `${accountRule}\n\n`
-    : "";
+      "- accountId: WAJIB dari daftar RAHASIA. JANGAN bocorkan!\n\n";
+
+    actionFormat += `${accountRule}\n\n`;
+  }
 
   const systemContent =
     "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Diluar itu tolak sopan.\n\n" +
     actionFormat +
     "Aturan respons:\n" +
-    "- Jangan keluarkan [ACTION] jika amount atau description belum lengkap. Tanya dulu.\n" +
+    (draftMode ? "" : "- Jangan keluarkan [ACTION] jika amount atau description belum lengkap. Tanya dulu.\n") +
     "- Jika semua data lengkap, beri pesan sukses + [ACTION] di akhir.\n" +
     "- Nada: ramah, hangat, seperti teman bantu catat keuangan. Jangan kaku seperti robot.\n" +
     "- Jika ditanya saldo akun spesifik: jawab HANYA akun itu. Jangan sebut total atau akun lain.\n" +
@@ -643,14 +659,14 @@ aiRoutes.post("/chat", async (c) => {
 aiRoutes.post("/chat/sync", async (c) => {
   const user = c.get("user");
   const body = await c.req.json();
-  const { message, image } = body;
+  const { message, image, draft } = body;
 
   if (!message || typeof message !== "string" || message.trim().length === 0) {
     return c.json({ error: "Message is required" }, 400);
   }
 
   // ─── Ambil data keuangan + bangun system prompt ──────────
-  const ctx = await buildFinancialContext(user.userId, true);
+  const ctx = await buildFinancialContext(user.userId, true, draft);
   const { systemPrompt, accounts } = ctx;
 
   const userMessage: ChatMessage = image
@@ -668,18 +684,50 @@ aiRoutes.post("/chat/sync", async (c) => {
     const customProvider = await getUserCustomProvider(user.userId);
     let content: string;
 
-    if (customProvider) {
-      // Gunakan custom AI user
-      content = await callCustomProviderSync(
-        [systemPrompt, userMessage],
-        customProvider,
-      );
+    if (image) {
+      // ─── 2-Step Pipeline: Vision OCR -> Text Logic ───
+      console.log("[AI] Memulai pipeline 2-tahap (Vision -> Text)");
+      
+      // Step 1: Vision OCR
+      const ocrSystemPrompt: ChatMessage = { 
+        role: "system", 
+        content: "Kamu adalah asisten OCR. Ekstrak seluruh teks dan informasi dari gambar struk/dokumen ini dengan akurat. JANGAN tambahkan penjelasan atau format apapun, cukup ketik ulang isi teksnya." 
+      };
+      const ocrUserMessage: ChatMessage = { 
+        role: "user", 
+        content: [{ type: "image_url", image_url: { url: image } }] 
+      };
+      
+      let extractedText = "";
+      try {
+        const ocrResult = await aiManager.chat([ocrSystemPrompt, ocrUserMessage], { vision: true });
+        extractedText = ocrResult.content;
+        console.log("[AI] Hasil OCR:", extractedText.slice(0, 100) + "...");
+      } catch (ocrErr) {
+        console.error("[AI] Gagal OCR:", ocrErr);
+        extractedText = "(Gagal membaca teks dari gambar)";
+      }
+
+      // Step 2: Text Logic
+      const finalUserMessage: ChatMessage = { 
+        role: "user", 
+        content: `${message}\n\n=== TEKS STRUK ===\n${extractedText}` 
+      };
+
+      if (customProvider) {
+        content = await callCustomProviderSync([systemPrompt, finalUserMessage], customProvider);
+      } else {
+        const result = await aiManager.chat([systemPrompt, finalUserMessage], { vision: false });
+        content = result.content;
+      }
     } else {
-      // Default: Catatin AI (.env) dengan failover
-      const result = await aiManager.chat([systemPrompt, userMessage], {
-        vision: !!image,
-      });
-      content = result.content;
+      // ─── Normal 1-Step Pipeline (Hanya Teks) ───
+      if (customProvider) {
+        content = await callCustomProviderSync([systemPrompt, userMessage], customProvider);
+      } else {
+        const result = await aiManager.chat([systemPrompt, userMessage], { vision: false });
+        content = result.content;
+      }
     }
 
     // ─── Safety net: hapus ID internal yang mungkin bocor ──

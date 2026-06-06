@@ -1,7 +1,7 @@
 import prisma from "../prisma";
 
 export const processTransactionActions = async (content: string, userId: string, accounts: any[]) => {
-  const actionRegex = /\[ACTION:(record_transaction|update_transaction|delete_transaction)\]([\s\S]*?)\[\/ACTION\]/g;
+  const actionRegex = /\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction)\]([\s\S]*?)\[\/ACTION\]/g;
   let match;
   const processedEvents: any[] = [];
 
@@ -68,18 +68,22 @@ export const processTransactionActions = async (content: string, userId: string,
         continue;
       }
 
-      // --- record_transaction ---
+      // --- record_transaction & draft_transaction ---
       const {
         type,
-        amount,
         description,
         category: catName,
         accountId,
       } = parsed;
 
+      let { amount } = parsed;
+      if (typeof amount === "string") {
+        amount = Number(amount.replace(/\D/g, ""));
+      }
+
       if (!type || !amount || !description) continue;
       if (!["INCOME", "EXPENSE"].includes(type)) continue;
-      if (typeof amount !== "number" || amount <= 0) continue;
+      if (typeof amount !== "number" || isNaN(amount) || amount <= 0) continue;
 
       // Validasi accountId jika diberikan
       let finalAccountId: string | null = null;
@@ -107,15 +111,39 @@ export const processTransactionActions = async (content: string, userId: string,
         if (existingCat) {
           categoryId = existingCat.id;
         } else {
-          const newCat = await prisma.category.create({
-            data: {
-              userId: userId,
-              name: catName,
-              type: type as any,
-            },
-          });
-          categoryId = newCat.id;
+          // Hanya buat kategori di DB jika bukan DRAFT, 
+          // tapi untuk DRAFT kita bisa buat saja kategori barunya supaya tidak error saat post
+          if (actionType === "record_transaction") {
+             const newCat = await prisma.category.create({
+               data: {
+                 userId: userId,
+                 name: catName,
+                 type: type as any,
+               },
+             });
+             categoryId = newCat.id;
+          }
         }
+      }
+
+      const accName = accounts.find((a) => a.id === finalAccountId)?.name || "Umum";
+
+      if (actionType === "draft_transaction") {
+        processedEvents.push({
+          action: "draft",
+          transaction: {
+            id: "draft-" + Date.now() + Math.floor(Math.random() * 1000),
+            type,
+            amount,
+            description,
+            categoryId,
+            category: catName || "Umum",
+            accountId: finalAccountId,
+            account: accName,
+            date: new Date().toISOString()
+          }
+        });
+        continue;
       }
 
       // Buat transaksi
@@ -143,8 +171,6 @@ export const processTransactionActions = async (content: string, userId: string,
         return created;
       });
 
-      const accName = accounts.find((a) => a.id === finalAccountId)?.name || "Umum";
-      
       processedEvents.push({
         action: "record",
         transaction: {

@@ -65,6 +65,11 @@ transactions.get("/:id", async (c) => {
 
   const tx = await prisma.transaction.findFirst({
     where: { id, userId },
+    include: {
+      category: { select: { name: true, icon: true, color: true } },
+      account: { select: { name: true } },
+      customer: { select: { name: true } }
+    }
   });
 
   if (!tx) return c.json({ error: "Transaksi tidak ditemukan" }, 404);

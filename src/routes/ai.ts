@@ -591,7 +591,7 @@ aiRoutes.post("/chat/sync", async (c) => {
     }
 
     // ─── Parse & proses transaksi dari respons ────────────
-    const processedEvents = await processTransactionActions(content, user.userId, []);
+    const processedEvents = await processTransactionActions(content, user.userId, accounts);
     
     // Map output structure to maintain backward compatibility if needed by the frontend sync caller
     const createdTxs = processedEvents.map(e => e.transaction);

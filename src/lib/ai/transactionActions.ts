@@ -84,7 +84,9 @@ export const processTransactionActions = async (content: string, userId: string,
       // Validasi accountId jika diberikan
       let finalAccountId: string | null = null;
       if (accountId && typeof accountId === "string") {
-        const acc = accounts.find((a) => a.id === accountId);
+        const acc = accounts.find(
+          (a) => a.id === accountId || a.name.toLowerCase() === accountId.toLowerCase()
+        );
         if (acc) {
           finalAccountId = acc.id;
         } else {

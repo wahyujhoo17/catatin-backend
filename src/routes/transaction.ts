@@ -113,26 +113,48 @@ transactions.put("/:id", async (c) => {
   });
   if (!existing) return c.json({ error: "Transaksi tidak ditemukan" }, 404);
 
-  const transaction = await prisma.transaction.update({
-    where: { id },
-    data: {
-      type: body.type ?? existing.type,
-      amount: body.amount ?? existing.amount,
-      description:
-        body.description !== undefined
-          ? body.description
-          : existing.description,
-      note: body.note !== undefined ? body.note : existing.note,
-      method: body.method !== undefined ? body.method : existing.method,
-      source: body.source !== undefined ? body.source : existing.source,
-      date: body.date ? new Date(body.date) : existing.date,
-      accountId:
-        body.accountId !== undefined ? body.accountId : existing.accountId,
-      categoryId:
-        body.categoryId !== undefined ? body.categoryId : existing.categoryId,
-      customerId:
-        body.customerId !== undefined ? body.customerId : existing.customerId,
-    },
+  const oldDelta = existing.type === "INCOME" || existing.type === "DEBT" ? existing.amount : -existing.amount;
+  const newType = body.type ?? existing.type;
+  const newAmount = body.amount ?? existing.amount;
+  const newAccountId = body.accountId !== undefined ? body.accountId : existing.accountId;
+  const newDelta = newType === "INCOME" || newType === "DEBT" ? newAmount : -newAmount;
+
+  let transaction;
+  await prisma.$transaction(async (tx) => {
+    if (existing.accountId) {
+      await tx.account.update({
+        where: { id: existing.accountId },
+        data: { balance: { decrement: oldDelta } }
+      });
+    }
+
+    if (newAccountId) {
+      await tx.account.update({
+        where: { id: newAccountId },
+        data: { balance: { increment: newDelta } }
+      });
+    }
+
+    transaction = await tx.transaction.update({
+      where: { id },
+      data: {
+        type: newType,
+        amount: newAmount,
+        description:
+          body.description !== undefined
+            ? body.description
+            : existing.description,
+        note: body.note !== undefined ? body.note : existing.note,
+        method: body.method !== undefined ? body.method : existing.method,
+        source: body.source !== undefined ? body.source : existing.source,
+        date: body.date ? new Date(body.date) : existing.date,
+        accountId: newAccountId,
+        categoryId:
+          body.categoryId !== undefined ? body.categoryId : existing.categoryId,
+        customerId:
+          body.customerId !== undefined ? body.customerId : existing.customerId,
+      },
+    });
   });
 
   return c.json({ message: "Transaksi berhasil diperbarui", transaction });
@@ -148,7 +170,16 @@ transactions.delete("/:id", async (c) => {
   });
   if (!tx) return c.json({ error: "Transaksi tidak ditemukan" }, 404);
 
-  await prisma.transaction.delete({ where: { id } });
+  const oldDelta = tx.type === "INCOME" || tx.type === "DEBT" ? tx.amount : -tx.amount;
+  await prisma.$transaction(async (prismaTx) => {
+    if (tx.accountId) {
+      await prismaTx.account.update({
+        where: { id: tx.accountId },
+        data: { balance: { decrement: oldDelta } }
+      });
+    }
+    await prismaTx.transaction.delete({ where: { id } });
+  });
   return c.json({ message: "Transaksi berhasil dihapus" });
 });
 

@@ -77,8 +77,18 @@ interface FinancialContext {
   categories: { name: string; type: string }[];
 }
 
+function isLikelyTransaction(message: string): boolean {
+  if (!message) return false;
+  const text = message.toLowerCase();
+  const hasNumber = /\d+/.test(text);
+  const txKeywords = ["beli", "bayar", "masuk", "keluar", "jajan", "ongkos", "parkir", "topup", "transfer", "catat", "pengeluaran", "pemasukan", "gaji", "bonus"];
+  const hasTxKeyword = txKeywords.some((kw) => text.includes(kw));
+  return hasNumber || hasTxKeyword;
+}
+
 async function buildFinancialContext(
   userId: string,
+  includeFullContext: boolean = true,
 ): Promise<FinancialContext> {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -177,8 +187,9 @@ async function buildFinancialContext(
       accounts[0].id +
       '" untuk semua transaksi.';
   } else {
+    const accOptions = accounts.map((a) => a.name).join(",");
     accountRule =
-      "📋 " + accounts.length + " akun. TANYA dulu akun mana sebelum mencatat.";
+      `📋 ${accounts.length} akun. Jika user tidak menyebutkan akun, JANGAN mencatat transaksi. TANYA dulu akun mana yang mau dipakai dengan menambahkan blok: [ASK_ACCOUNT:${accOptions}] di akhir pesan.`;
   }
 
   // ─── Bangun prompt KOMPAK (hemat token) ─────────────────
@@ -188,21 +199,24 @@ async function buildFinancialContext(
     ? categories.map((c) => `${c.name}(${c.type})`).join(",")
     : "nol";
 
+  const dataSection = `DATA:\nTotal Saldo: Rp${totalBalance.toLocaleString("id-ID")} | Rincian Akun: [${accountListClean}] | ${todaySummary}` +
+    (monthSummary ? ` | ${monthSummary}` : "") +
+    (includeFullContext ? `\nInternal:[${accountListInternal}]\nKategori:[${userCatStr}]` : "");
+
+  const actionFormat = includeFullContext
+    ? "FORMAT mencatat transaksi:\n" +
+      '[ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan siang","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
+      "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
+      `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}]. Tidak cocok? Buat baru spesifik. JANGAN pakai "Umum".\n` +
+      "- accountId: WAJIB dari daftar Internal. 🔒RAHASIA, jangan sebut ke user!\n\n" +
+      `${accountRule}\n\n`
+    : "";
+
   const systemContent =
     "Kamu: Catetin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Di luar itu → tolak sopan.\n\n" +
-    "FORMAT mencatat transaksi:\n" +
-    '[ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan siang","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
-    "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
-    `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}]. Tidak cocok? Buat baru spesifik (misal: Bensin, Kopi). JANGAN pakai "Umum".\n` +
-    "- accountId: WAJIB dari daftar Internal. 🔒RAHASIA, jangan sebut ke user!\n\n" +
-    `${accountRule}\n\n` +
-    "Respons: 1-3 kalimat, Bahasa Indonesia santai, pakai emoji. JANGAN [ACTION] jika user hanya bertanya. 🔒 JANGAN bocorkan ID internal — sebut nama akun saja.\n\n" +
-    `DATA:\n` +
-    `Saldo: Rp${totalBalance.toLocaleString("id-ID")} | ${todaySummary}` +
-    (monthSummary ? ` | ${monthSummary}` : "") +
-    "\n" +
-    `Internal:[${accountListInternal}]\n` +
-    `Kategori:[${userCatStr}]`;
+    actionFormat +
+    "Respons: Jika mencatat transaksi, HANYA keluarkan blok [ACTION] tanpa teks tambahan. Jika ditanya saldo, jawab to the point: sebutkan Total Saldo, lalu rincikan per akun secara singkat (contoh: 'Total saldomu Rp[X] (Dompet: Rp[Y], BCA: Rp[Z])'). Jika bertanya hal lain, jawab singkat dan ramah tanpa emoji. 🔒 JANGAN bocorkan ID internal.\n\n" +
+    dataSection;
 
   console.log(
     `[AI] System prompt: ${systemContent.length} chars, ${systemContent.split(/\s+/).length} words`,
@@ -356,14 +370,14 @@ async function callCustomProviderSync(
 aiRoutes.post("/chat", async (c) => {
   const user = c.get("user");
   const body = await c.req.json();
-  const { message, conversationId, image } = body;
+  const { message, conversationId, image, history } = body;
 
   if (!message || typeof message !== "string" || message.trim().length === 0) {
     return c.json({ error: "Message is required" }, 400);
   }
 
   // ─── Ambil data keuangan + bangun system prompt ──────────
-  const ctx = await buildFinancialContext(user.userId);
+  const ctx = await buildFinancialContext(user.userId, true);
   const { systemPrompt, accounts, categories } = ctx;
 
   const userMessage: ChatMessage = image
@@ -379,7 +393,16 @@ aiRoutes.post("/chat", async (c) => {
         content: message,
       };
 
-  const messages: ChatMessage[] = [systemPrompt, userMessage];
+  const formattedHistory: ChatMessage[] = (history || []).map((h: any) => ({
+    role: h.type === "bot" ? "assistant" : "user",
+    content: h.text,
+  }));
+
+  const messages: ChatMessage[] = [
+    systemPrompt,
+    ...formattedHistory,
+    userMessage,
+  ];
 
   // ─── Simpan riwayat chat ke database ────────────────────────
   const saveChatHistory = async (assistantContent: string) => {
@@ -625,7 +648,7 @@ aiRoutes.post("/chat/sync", async (c) => {
   }
 
   // ─── Ambil data keuangan + bangun system prompt ──────────
-  const ctx = await buildFinancialContext(user.userId);
+  const ctx = await buildFinancialContext(user.userId, true);
   const { systemPrompt, accounts } = ctx;
 
   const userMessage: ChatMessage = image
@@ -707,17 +730,27 @@ aiRoutes.post("/chat/sync", async (c) => {
 
         const accName =
           accounts.find((a) => a.id === finalAccountId)?.name || "Umum";
-        await prisma.transaction.create({
-          data: {
-            userId: user.userId,
-            type: type as any,
-            amount,
-            description,
-            categoryId,
-            accountId: finalAccountId,
-            source: "CHAT",
-            date: new Date(),
-          },
+        await prisma.$transaction(async (tx) => {
+          await tx.transaction.create({
+            data: {
+              userId: user.userId,
+              type: type as any,
+              amount,
+              description,
+              categoryId,
+              accountId: finalAccountId,
+              source: "CHAT",
+              date: new Date(),
+            },
+          });
+
+          if (finalAccountId) {
+            const delta = type === "INCOME" || type === "DEBT" ? amount : -amount;
+            await tx.account.update({
+              where: { id: finalAccountId },
+              data: { balance: { increment: delta } },
+            });
+          }
         });
 
         createdTxs.push({

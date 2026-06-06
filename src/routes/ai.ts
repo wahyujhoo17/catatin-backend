@@ -4,7 +4,10 @@ import prisma from "../lib/prisma";
 import { authMiddleware } from "../middleware/auth";
 import { aiManager } from "../lib/ai/providerManager";
 import type { ChatMessage } from "../lib/ai/types";
-import { processTransactionActions, stripActions } from "../lib/ai/transactionActions";
+import {
+  processTransactionActions,
+  stripActions,
+} from "../lib/ai/transactionActions";
 
 const aiRoutes = new Hono();
 
@@ -82,7 +85,22 @@ function isLikelyTransaction(message: string): boolean {
   if (!message) return false;
   const text = message.toLowerCase();
   const hasNumber = /\d+/.test(text);
-  const txKeywords = ["beli", "bayar", "masuk", "keluar", "jajan", "ongkos", "parkir", "topup", "transfer", "catat", "pengeluaran", "pemasukan", "gaji", "bonus"];
+  const txKeywords = [
+    "beli",
+    "bayar",
+    "masuk",
+    "keluar",
+    "jajan",
+    "ongkos",
+    "parkir",
+    "topup",
+    "transfer",
+    "catat",
+    "pengeluaran",
+    "pemasukan",
+    "gaji",
+    "bonus",
+  ];
   const hasTxKeyword = txKeywords.some((kw) => text.includes(kw));
   return hasNumber || hasTxKeyword;
 }
@@ -190,7 +208,11 @@ async function buildFinancialContext(
   } else {
     const accOptions = accounts.map((a) => a.name).join(",");
     accountRule =
-      `📋 ${accounts.length} akun. Jika user mencatat transaksi TAPI tidak menyebutkan akun, JANGAN keluarkan blok [ACTION]. Keluarkan pesan ramah (contoh: 'Pemasukan sebesar Rp20.000 akan dimasukkan ke dompet mana? Silakan pilih di bawah:') lalu wajib tambahkan blok [ASK_ACCOUNT:${accOptions}] di akhir pesan.`;
+      `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
+      `ATURAN PENTING: Jika user mencatat transaksi tapi tidak menyebutkan akun spesifik:\n` +
+      `1. JANGAN keluarkan blok [ACTION].\n` +
+      `2. Tanya ramah: misalnya "Pemasukan sebesar RpXXX akan dimasukkan ke dompet mana? Silakan pilih di bawah:"\n` +
+      `3. WAJIB akhiri pesan dengan tepat baris ini di baris tersendiri: [ASK_ACCOUNT:${accOptions}]`;
   }
 
   // ─── Bangun prompt KOMPAK (hemat token) ─────────────────
@@ -200,15 +222,18 @@ async function buildFinancialContext(
     ? categories.map((c) => `${c.name}(${c.type})`).join(",")
     : "nol";
 
-  const dataSection = `DATA:\nTotal Saldo: Rp${totalBalance.toLocaleString("id-ID")} | Rincian Akun: [${accountListClean}] | ${todaySummary}` +
+  const dataSection =
+    `DATA:\nTotal Saldo: Rp${totalBalance.toLocaleString("id-ID")} | Rincian Akun: [${accountListClean}] | ${todaySummary}` +
     (monthSummary ? ` | ${monthSummary}` : "") +
-    (includeFullContext ? `\nInternal:[${accountListInternal}]\nKategori:[${userCatStr}]` : "");
+    (includeFullContext
+      ? `\nInternal:[${accountListInternal}]\nKategori:[${userCatStr}]`
+      : "");
 
   const actionFormat = includeFullContext
     ? "FORMAT AKSI:\n" +
-      "1. Mencatat: [ACTION:record_transaction]{\"type\":\"EXPENSE\",\"amount\":50000,\"description\":\"Makan\",\"category\":\"Makanan\",\"accountId\":\"<id>\"}[/ACTION]\n" +
-      "2. Menghapus: [ACTION:delete_transaction]{\"id\":\"<id_transaksi_dari_data>\"}[/ACTION]\n" +
-      "3. Mengubah: [ACTION:update_transaction]{\"id\":\"<id>\",\"amount\":60000,\"description\":\"Makan besar\"}[/ACTION]\n" +
+      '1. Mencatat: [ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
+      '2. Menghapus: [ACTION:delete_transaction]{"id":"<id_transaksi_dari_data>"}[/ACTION]\n' +
+      '3. Mengubah: [ACTION:update_transaction]{"id":"<id>","amount":60000,"description":"Makan besar"}[/ACTION]\n' +
       "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
       "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
       `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
@@ -236,6 +261,26 @@ async function buildFinancialContext(
     categories,
   };
 }
+
+// ─── Fallback: inject [ASK_ACCOUNT:...] if AI forgot ──────────
+function ensureAskAccount(
+  text: string,
+  accounts: { name: string }[],
+): string | null {
+  // Only relevant if multiple accounts exist
+  if (accounts.length < 2) return null;
+  // Already has the tag — no need to inject
+  if (/\[ASK_ACCOUNT:/.test(text)) return null;
+
+  // Detect account-selection language in AI response
+  const askPattern =
+    /(?:dompet|akun|rekening)\s*(?:mana|apa|yang|yg)\b|pilih\s*(?:di\s*bawah|akun|dompet)/i;
+  if (!askPattern.test(text)) return null;
+
+  const accOptions = accounts.map((a) => a.name).join(",");
+  return `\n\n[ASK_ACCOUNT:${accOptions}]`;
+}
+
 async function callCustomProviderStream(
   messages: ChatMessage[],
   custom: CustomProvider,
@@ -510,9 +555,23 @@ aiRoutes.post("/chat", async (c) => {
         }
       }
 
+      // ─── Fallback: inject [ASK_ACCOUNT:...] jika AI lupa ──
+      const injectedTag = ensureAskAccount(fullResponse, accounts);
+      if (injectedTag) {
+        fullResponse += injectedTag;
+        await s.write(
+          `data: ${JSON.stringify({ type: "token", content: injectedTag })}\n\n`,
+        );
+        console.log("[AI] Injected missing [ASK_ACCOUNT:...] tag");
+      }
+
       // ─── Proses transaksi dari respons AI ─────────────
       if (fullResponse.trim()) {
-        const createdTxs = await processTransactionActions(fullResponse, user.userId, accounts);
+        const createdTxs = await processTransactionActions(
+          fullResponse,
+          user.userId,
+          accounts,
+        );
 
         // Kirim event transaksi tercatat ke frontend
         if (createdTxs.length > 0) {
@@ -520,7 +579,7 @@ aiRoutes.post("/chat", async (c) => {
             let eventType = "transaction_created";
             if (ev.action === "update") eventType = "transaction_updated";
             if (ev.action === "delete") eventType = "transaction_deleted";
-            
+
             await s.write(
               `data: ${JSON.stringify({ type: eventType, transaction: ev.transaction })}\n\n`,
             );
@@ -590,11 +649,22 @@ aiRoutes.post("/chat/sync", async (c) => {
       content = result.content;
     }
 
+    // ─── Fallback: inject [ASK_ACCOUNT:...] jika AI lupa ──
+    const injectedTag = ensureAskAccount(content, accounts);
+    if (injectedTag) {
+      content += injectedTag;
+      console.log("[AI] Injected missing [ASK_ACCOUNT:...] tag");
+    }
+
     // ─── Parse & proses transaksi dari respons ────────────
-    const processedEvents = await processTransactionActions(content, user.userId, accounts);
-    
+    const processedEvents = await processTransactionActions(
+      content,
+      user.userId,
+      accounts,
+    );
+
     // Map output structure to maintain backward compatibility if needed by the frontend sync caller
-    const createdTxs = processedEvents.map(e => e.transaction);
+    const createdTxs = processedEvents.map((e) => e.transaction);
 
     // Strip [ACTION] blocks dari content yang disimpan
     // Strip [ACTION] blocks dari content yang disimpan

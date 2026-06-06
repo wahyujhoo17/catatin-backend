@@ -52,7 +52,7 @@ auth.post("/register", async (c) => {
     if (!phone) {
       return c.json({ error: "Nomor HP tidak valid" }, 400);
     }
-    email = `hp_${phone}@catetin.app`;
+    email = `hp_${phone}@catatin.app`;
   }
 
   // Check existing user — cek by email DAN by phone
@@ -164,24 +164,24 @@ auth.post("/verify-otp", async (c) => {
   if (!user) {
     const normalizedPhone = normalizePhone(identifier);
     if (normalizedPhone) {
-      // Cari by phone field, atau by synthetic email hp_*@catetin.app
-      const syntheticEmail = `hp_${normalizedPhone}@catetin.app`;
+      // Cari by phone field, atau by synthetic email hp_*@catatin.app
+      const syntheticEmail = `hp_${normalizedPhone}@catatin.app`;
       user = await prisma.user.findFirst({
         where: { OR: [{ phone: normalizedPhone }, { email: syntheticEmail }] },
       });
     }
   }
 
-  // Jika tidak ketemu juga, coba asumsikan itu synthetic email (hp_*@catetin.app)
+  // Jika tidak ketemu juga, coba asumsikan itu synthetic email (hp_*@catatin.app)
   // yang terbentuk dari nomor HP
   if (
     !user &&
     identifier.startsWith("hp_") &&
-    identifier.endsWith("@catetin.app")
+    identifier.endsWith("@catatin.app")
   ) {
     const phoneFromSynthetic = identifier
       .replace("hp_", "")
-      .replace("@catetin.app", "");
+      .replace("@catatin.app", "");
     const normalizedPhone = normalizePhone(phoneFromSynthetic);
     if (normalizedPhone) {
       user = await prisma.user.findFirst({
@@ -366,7 +366,7 @@ auth.post("/forgot-password", async (c) => {
   });
 
   const frontendUrl =
-    process.env.FRONTEND_URL || "https://catetin.lumicloud.my.id";
+    process.env.FRONTEND_URL || "https://catatin.lumicloud.my.id";
   const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
 
   // Kirim email recovery link

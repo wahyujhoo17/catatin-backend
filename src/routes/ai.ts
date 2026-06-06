@@ -217,7 +217,7 @@ async function buildFinancialContext(
     : "";
 
   const systemContent =
-    "Kamu: Catetin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Di luar itu → tolak sopan.\n\n" +
+    "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Di luar itu → tolak sopan.\n\n" +
     actionFormat +
     "Respons: \n" +
     "- JANGAN PERNAH keluarkan blok [ACTION] jika 'amount' (jumlah) atau 'description' (untuk apa) belum diketahui. Tanya dulu ke user dengan ramah!\n" +
@@ -271,7 +271,7 @@ async function callCustomProviderStream(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${custom.apiKey}`,
-      "User-Agent": "Catetin/1.0",
+      "User-Agent": "Catatin/1.0",
     },
     body,
   });
@@ -358,7 +358,7 @@ async function callCustomProviderSync(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${custom.apiKey}`,
-      "User-Agent": "Catetin/1.0",
+      "User-Agent": "Catatin/1.0",
     },
     body,
   });
@@ -493,7 +493,7 @@ aiRoutes.post("/chat", async (c) => {
           }
         }
       } else {
-        // ─── Default: gunakan Catetin AI (.env) dengan failover ──
+        // ─── Default: gunakan Catatin AI (.env) dengan failover ──
         const generator = aiManager.chatStream(messages, { vision: !!image });
 
         for await (const event of generator) {
@@ -583,7 +583,7 @@ aiRoutes.post("/chat/sync", async (c) => {
         customProvider,
       );
     } else {
-      // Default: Catetin AI (.env) dengan failover
+      // Default: Catatin AI (.env) dengan failover
       const result = await aiManager.chat([systemPrompt, userMessage], {
         vision: !!image,
       });
@@ -632,7 +632,7 @@ aiRoutes.post("/chat/sync", async (c) => {
     return c.json({
       content: cleanContent,
       transactions: createdTxs.length > 0 ? createdTxs : undefined,
-      provider: customProvider ? "custom" : "catetin",
+      provider: customProvider ? "custom" : "catatin",
     });
   } catch (err: any) {
     return c.json({ error: err.message || "AI request failed" }, 503);

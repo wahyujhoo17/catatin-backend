@@ -141,7 +141,7 @@ dashboard.get("/summary", async (c) => {
 
     if (hoursSinceUpdate > 12 || !userDb?.aiInsight) {
       // Generate new insight
-      const prompt = `Kamu AI Catetin. Analisis singkat keuangan user bulan ini: Pemasukan Rp${totalIncome.toLocaleString('id-ID')}, Pengeluaran Rp${totalExpense.toLocaleString('id-ID')}. Kesehatan budget: ${budgetHealth}% (${healthLabel}). Berikan 1 kalimat Insight proaktif yang ramah, memotivasi, atau menegur jika boros (Maks 15-20 kata, gunakan emoji, bahasa gaul santai/asik). Jangan basa-basi.`;
+      const prompt = `Kamu AI Catatin. Analisis singkat keuangan user bulan ini: Pemasukan Rp${totalIncome.toLocaleString('id-ID')}, Pengeluaran Rp${totalExpense.toLocaleString('id-ID')}. Kesehatan budget: ${budgetHealth}% (${healthLabel}). Berikan 1 kalimat Insight proaktif yang ramah, memotivasi, atau menegur jika boros (Maks 15-20 kata, gunakan emoji, bahasa gaul santai/asik). Jangan basa-basi.`;
       
       const aiResponse = await aiManager.chat([{ role: "user", content: prompt }], { vision: false });
       aiInsight = aiResponse.content.trim().replace(/^["']|["']$/g, '');
@@ -156,7 +156,7 @@ dashboard.get("/summary", async (c) => {
     }
   } catch (err) {
     console.error("Gagal generate AI Insight:", err);
-    aiInsight = "Ayo mulai kelola keuanganmu bersama Catetin! 🚀";
+    aiInsight = "Ayo mulai kelola keuanganmu bersama Catatin! 🚀";
   }
 
   return c.json({

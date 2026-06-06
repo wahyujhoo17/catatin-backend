@@ -2,7 +2,7 @@ import nodemailer from "nodemailer";
 
 // ─── Logo ─────────────────────────────────────────────────────
 const FRONTEND_URL =
-  process.env.FRONTEND_URL || "https://catetin.lumicloud.my.id";
+  process.env.FRONTEND_URL || "https://catatin.lumicloud.my.id";
 const LOGO_URL = `${FRONTEND_URL}/logo/logo.png`;
 
 // ─── Shared email wrapper ─────────────────────────────────────
@@ -30,14 +30,14 @@ function emailWrapper(title: string, content: string): string {
 <body>
   <div class="container">
     <div class="header">
-      <img src="${LOGO_URL}" alt="Catetin" />
+      <img src="${LOGO_URL}" alt="Catatin" />
       <h1>${title}</h1>
     </div>
     <div class="body">
       ${content}
     </div>
     <div class="footer">
-      <p>© ${new Date().getFullYear()} Catetin. All rights reserved.</p>
+      <p>© ${new Date().getFullYear()} Catatin. All rights reserved.</p>
       <p>Financial Intelligence</p>
     </div>
   </div>
@@ -80,13 +80,13 @@ function getTransporter(): nodemailer.Transporter | null {
   return transporter;
 }
 
-const FROM = `"Catetin" <${process.env.SMTP_FROM || "noreply@catetin.app"}>`;
+const FROM = `"Catatin" <${process.env.SMTP_FROM || "noreply@catatin.app"}>`;
 
 // ─── Send OTP Email (REGISTER only) ───────────────────────────
 export async function sendOtpEmail(to: string, otp: string): Promise<void> {
   const content = `
       <p>Halo,</p>
-      <p>Terima kasih telah mendaftar di Catetin! Gunakan kode OTP berikut untuk verifikasi akun Anda:</p>
+      <p>Terima kasih telah mendaftar di Catatin! Gunakan kode OTP berikut untuk verifikasi akun Anda:</p>
       <div class="otp-code">${otp}</div>
       <p>Kode ini berlaku selama <strong>10 menit</strong>.</p>
       <p style="color: #8e8ea0; font-size: 13px;">Jika Anda tidak melakukan pendaftaran, abaikan email ini.</p>`;
@@ -112,7 +112,7 @@ export async function sendRecoveryEmail(
       <p style="color: #8e8ea0; font-size: 13px;">Jika Anda tidak meminta reset password, abaikan email ini — akun Anda tetap aman.</p>`;
 
   const html = emailWrapper("Reset Password", content);
-  await doSend(to, "Reset Password Catetin", html);
+  await doSend(to, "Reset Password Catatin", html);
 }
 
 // ─── Send generic email ───────────────────────────────────────

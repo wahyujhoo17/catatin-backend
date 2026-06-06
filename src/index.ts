@@ -24,7 +24,7 @@ const app = new Hono();
 
 // ─── GLOBAL MIDDLEWARE ────────────────────────────────────────
 const ALLOWED_ORIGINS = [
-  process.env.FRONTEND_URL || "https://catetin.lumicloud.my.id",
+  process.env.FRONTEND_URL || "https://catatin.lumicloud.my.id",
   "http://localhost:3000",
   "http://localhost:3001",
 ].filter(Boolean) as string[];

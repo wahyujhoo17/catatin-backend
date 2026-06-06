@@ -59,10 +59,10 @@ export async function sendOtpWhatsApp(
 ): Promise<{ success: boolean; error?: string }> {
   const action =
     type === "REGISTER"
-      ? "mendaftarkan akun Catetin"
-      : "mereset password Catetin";
+      ? "mendaftarkan akun Catatin"
+      : "mereset password Catatin";
 
-  const message = `🔐 *Catetin — Kode Verifikasi*
+  const message = `🔐 *Catatin — Kode Verifikasi*
 
 Kode OTP Anda: *${otp}*
 
@@ -71,7 +71,7 @@ Kode berlaku selama 10 menit.
 
 Jika Anda tidak melakukan permintaan ini, abaikan pesan ini.
 
-— Catetin Financial Intelligence`;
+— Catatin Financial Intelligence`;
 
   return sendWhatsApp(to, message);
 }

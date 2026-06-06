@@ -107,7 +107,7 @@ async function buildFinancialContext(
       }),
       prisma.transaction.findMany({
         where: { userId, date: { gte: startOfDay } },
-        select: { type: true, amount: true, description: true },
+        select: { id: true, type: true, amount: true, description: true },
         orderBy: { date: "desc" },
         take: 10,
       }),
@@ -160,8 +160,8 @@ async function buildFinancialContext(
     const recentItems = todayTx
       .slice(0, 5)
       .map(
-        (t) =>
-          (t.type === "EXPENSE" ? "-" : "+") + t.description + ":" + t.amount,
+        (t: any) =>
+          `[${t.id}]${t.type === "EXPENSE" ? "-" : "+"}${t.description}:${t.amount}`,
       )
       .join("|");
     todaySummary += " | transaksi: " + recentItems;
@@ -189,7 +189,7 @@ async function buildFinancialContext(
   } else {
     const accOptions = accounts.map((a) => a.name).join(",");
     accountRule =
-      `📋 ${accounts.length} akun. Jika user tidak menyebutkan akun, JANGAN mencatat transaksi. TANYA dulu akun mana yang mau dipakai dengan menambahkan blok: [ASK_ACCOUNT:${accOptions}] di akhir pesan.`;
+      `📋 ${accounts.length} akun. Jika user mencatat transaksi TAPI tidak menyebutkan akun, JANGAN keluarkan blok [ACTION]. Keluarkan pesan ramah (contoh: 'Pemasukan sebesar Rp20.000 akan dimasukkan ke dompet mana? Silakan pilih di bawah:') lalu wajib tambahkan blok [ASK_ACCOUNT:${accOptions}] di akhir pesan.`;
   }
 
   // ─── Bangun prompt KOMPAK (hemat token) ─────────────────
@@ -204,11 +204,14 @@ async function buildFinancialContext(
     (includeFullContext ? `\nInternal:[${accountListInternal}]\nKategori:[${userCatStr}]` : "");
 
   const actionFormat = includeFullContext
-    ? "FORMAT mencatat transaksi:\n" +
-      '[ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan siang","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
+    ? "FORMAT AKSI:\n" +
+      "1. Mencatat: [ACTION:record_transaction]{\"type\":\"EXPENSE\",\"amount\":50000,\"description\":\"Makan\",\"category\":\"Makanan\",\"accountId\":\"<id>\"}[/ACTION]\n" +
+      "2. Menghapus: [ACTION:delete_transaction]{\"id\":\"<id_transaksi_dari_data>\"}[/ACTION]\n" +
+      "3. Mengubah: [ACTION:update_transaction]{\"id\":\"<id>\",\"amount\":60000,\"description\":\"Makan besar\"}[/ACTION]\n" +
+      "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
       "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
-      `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}]. Tidak cocok? Buat baru spesifik. JANGAN pakai "Umum".\n` +
-      "- accountId: WAJIB dari daftar Internal. 🔒RAHASIA, jangan sebut ke user!\n\n" +
+      `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
+      "- accountId: WAJIB dari daftar Internal. 🔒RAHASIA!\n\n" +
       `${accountRule}\n\n`
     : "";
 
@@ -450,18 +453,74 @@ aiRoutes.post("/chat", async (c) => {
 
   // ─── Parse & execute transaction actions ────────────────────
   const processTransactionActions = async (content: string) => {
-    const actionRegex = /\[ACTION:record_transaction\]([\s\S]*?)\[\/ACTION\]/g;
+    const actionRegex = /\[ACTION:(record_transaction|update_transaction|delete_transaction)\]([\s\S]*?)\[\/ACTION\]/g;
     let match;
-    const created: {
-      type: string;
-      amount: number;
-      description: string;
-      category: string;
-    }[] = [];
+    const processedEvents: any[] = [];
 
     while ((match = actionRegex.exec(content)) !== null) {
       try {
-        const parsed = JSON.parse(match[1].trim());
+        const actionType = match[1];
+        const parsed = JSON.parse(match[2].trim());
+        
+        if (actionType === "delete_transaction") {
+          const txId = parsed.id;
+          if (!txId) continue;
+          const existingTx = await prisma.transaction.findUnique({ where: { id: txId } });
+          if (!existingTx || existingTx.userId !== user.userId) continue;
+          
+          await prisma.$transaction(async (tx) => {
+            // Revert balance
+            if (existingTx.accountId) {
+              const delta = existingTx.type === "INCOME" || existingTx.type === "DEBT" ? -existingTx.amount : existingTx.amount;
+              await tx.account.update({
+                where: { id: existingTx.accountId },
+                data: { balance: { increment: delta } },
+              });
+            }
+            await tx.transaction.delete({ where: { id: txId } });
+          });
+          
+          processedEvents.push({ action: "delete", transaction: existingTx });
+          continue;
+        }
+
+        if (actionType === "update_transaction") {
+          const txId = parsed.id;
+          const newAmount = parsed.amount;
+          const newDesc = parsed.description;
+          if (!txId || typeof newAmount !== "number") continue;
+          
+          const existingTx = await prisma.transaction.findUnique({ where: { id: txId } });
+          if (!existingTx || existingTx.userId !== user.userId) continue;
+          
+          const updatedTx = await prisma.$transaction(async (tx) => {
+            // Revert old balance
+            if (existingTx.accountId) {
+              const oldDelta = existingTx.type === "INCOME" || existingTx.type === "DEBT" ? -existingTx.amount : existingTx.amount;
+              await tx.account.update({
+                where: { id: existingTx.accountId },
+                data: { balance: { increment: oldDelta } },
+              });
+            }
+            // Add new balance
+            if (existingTx.accountId) {
+              const newDelta = existingTx.type === "INCOME" || existingTx.type === "DEBT" ? newAmount : -newAmount;
+              await tx.account.update({
+                where: { id: existingTx.accountId },
+                data: { balance: { increment: newDelta } },
+              });
+            }
+            return await tx.transaction.update({
+              where: { id: txId },
+              data: { amount: newAmount, description: newDesc || existingTx.description },
+            });
+          });
+          
+          processedEvents.push({ action: "update", transaction: updatedTx });
+          continue;
+        }
+
+        // --- record_transaction ---
         const {
           type,
           amount,
@@ -510,43 +569,52 @@ aiRoutes.post("/chat", async (c) => {
         }
 
         // Buat transaksi
-        const tx = await prisma.transaction.create({
-          data: {
-            userId: user.userId,
-            type: type as any,
-            amount,
-            description,
-            categoryId,
-            accountId: finalAccountId,
-            source: "CHAT",
-            date: new Date(),
-          },
+        const newTx = await prisma.$transaction(async (tx) => {
+          const created = await tx.transaction.create({
+            data: {
+              userId: user.userId,
+              type: type as any,
+              amount,
+              description,
+              categoryId,
+              accountId: finalAccountId,
+              source: "CHAT",
+              date: new Date(),
+            },
+          });
+          
+          if (finalAccountId) {
+            const delta = type === "INCOME" || type === "DEBT" ? amount : -amount;
+            await tx.account.update({
+              where: { id: finalAccountId },
+              data: { balance: { increment: delta } },
+            });
+          }
+          return created;
         });
 
-        const accName =
-          accounts.find((a) => a.id === finalAccountId)?.name || "Umum";
-        console.log(
-          `[AI] Transaksi tercatat: ${type} Rp ${amount} — ${description} → ${accName}`,
-        );
-
-        created.push({
-          type,
-          amount,
-          description,
-          category: catName || "Umum",
+        const accName = accounts.find((a) => a.id === finalAccountId)?.name || "Umum";
+        
+        processedEvents.push({
+          action: "record",
+          transaction: {
+            ...newTx,
+            category: catName || "Umum",
+            account: accName,
+          }
         });
       } catch (parseErr) {
         console.warn("[AI] Gagal parse action:", parseErr);
       }
     }
 
-    return created;
+    return processedEvents;
   };
 
   // ─── Strip [ACTION] blocks from response ────────────────────
   function stripActions(content: string): string {
     return content
-      .replace(/\[ACTION:record_transaction\][\s\S]*?\[\/ACTION\]/g, "")
+      .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction)\][\s\S]*?\[\/ACTION\]/g, "")
       .trim();
   }
 
@@ -610,9 +678,13 @@ aiRoutes.post("/chat", async (c) => {
 
         // Kirim event transaksi tercatat ke frontend
         if (createdTxs.length > 0) {
-          for (const tx of createdTxs) {
+          for (const ev of createdTxs) {
+            let eventType = "transaction_created";
+            if (ev.action === "update") eventType = "transaction_updated";
+            if (ev.action === "delete") eventType = "transaction_deleted";
+            
             await s.write(
-              `data: ${JSON.stringify({ type: "transaction_created", transaction: tx })}\n\n`,
+              `data: ${JSON.stringify({ type: eventType, transaction: ev.transaction })}\n\n`,
             );
           }
         }
@@ -681,93 +753,14 @@ aiRoutes.post("/chat/sync", async (c) => {
     }
 
     // ─── Parse & proses transaksi dari respons ────────────
-    const actionRegex = /\[ACTION:record_transaction\]([\s\S]*?)\[\/ACTION\]/g;
-    let match;
-    const createdTxs: {
-      type: string;
-      amount: number;
-      description: string;
-      category: string;
-    }[] = [];
-
-    while ((match = actionRegex.exec(content)) !== null) {
-      try {
-        const parsed = JSON.parse(match[1].trim());
-        const {
-          type,
-          amount,
-          description,
-          category: catName,
-          accountId,
-        } = parsed;
-        if (!type || !amount || !description) continue;
-        if (!["INCOME", "EXPENSE"].includes(type)) continue;
-
-        // Validasi accountId
-        let finalAccountId: string | null = null;
-        if (accountId && typeof accountId === "string") {
-          const acc = accounts.find((a) => a.id === accountId);
-          if (acc) finalAccountId = acc.id;
-        }
-        if (!finalAccountId && accounts.length === 1) {
-          finalAccountId = accounts[0].id;
-        }
-
-        let categoryId: string | null = null;
-        if (catName) {
-          const existingCat = await prisma.category.findFirst({
-            where: { userId: user.userId, name: catName },
-          });
-          if (existingCat) {
-            categoryId = existingCat.id;
-          } else {
-            const newCat = await prisma.category.create({
-              data: { userId: user.userId, name: catName, type: type as any },
-            });
-            categoryId = newCat.id;
-          }
-        }
-
-        const accName =
-          accounts.find((a) => a.id === finalAccountId)?.name || "Umum";
-        await prisma.$transaction(async (tx) => {
-          await tx.transaction.create({
-            data: {
-              userId: user.userId,
-              type: type as any,
-              amount,
-              description,
-              categoryId,
-              accountId: finalAccountId,
-              source: "CHAT",
-              date: new Date(),
-            },
-          });
-
-          if (finalAccountId) {
-            const delta = type === "INCOME" || type === "DEBT" ? amount : -amount;
-            await tx.account.update({
-              where: { id: finalAccountId },
-              data: { balance: { increment: delta } },
-            });
-          }
-        });
-
-        createdTxs.push({
-          type,
-          amount,
-          description,
-          category: catName || "Umum",
-        });
-      } catch {
-        // skip parse error
-      }
-    }
+    const processedEvents = await processTransactionActions(content);
+    
+    // Map output structure to maintain backward compatibility if needed by the frontend sync caller
+    const createdTxs = processedEvents.map(e => e.transaction);
 
     // Strip [ACTION] blocks dari content yang disimpan
-    const cleanContent = content
-      .replace(/\[ACTION:record_transaction\][\s\S]*?\[\/ACTION\]/g, "")
-      .trim();
+    // Strip [ACTION] blocks dari content yang disimpan
+    const cleanContent = stripActions(content);
 
     // Simpan riwayat chat (sync)
     try {

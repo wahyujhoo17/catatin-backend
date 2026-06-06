@@ -23,6 +23,8 @@ model User {
   mode            WorkspaceMode?
   avatar          String?
   customAiConfig  Json?
+  aiInsight       String?
+  aiInsightUpdatedAt DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

@@ -15,13 +15,28 @@ transactions.get("/", async (c) => {
   const type = c.req.query("type");
   const categoryId = c.req.query("categoryId");
   const accountId = c.req.query("accountId");
+  const search = c.req.query("search");
+  const startDate = c.req.query("startDate");
+  const endDate = c.req.query("endDate");
 
-  const where: Record<string, unknown> = { userId };
+  const where: Record<string, any> = { userId };
   if (type && ["INCOME", "EXPENSE", "DEBT", "DEBT_PAYMENT"].includes(type)) {
     where.type = type;
   }
   if (categoryId) where.categoryId = categoryId;
   if (accountId) where.accountId = accountId;
+  if (search) {
+    where.description = { contains: search, mode: "insensitive" };
+  }
+  if (startDate || endDate) {
+    where.date = {};
+    if (startDate) where.date.gte = new Date(startDate);
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      where.date.lte = end;
+    }
+  }
 
   const [list, total] = await Promise.all([
     prisma.transaction.findMany({
@@ -29,6 +44,10 @@ transactions.get("/", async (c) => {
       orderBy: { date: "desc" },
       skip,
       take: limit,
+      include: {
+        category: { select: { name: true, icon: true, color: true } },
+        account: { select: { name: true } },
+      },
     }),
     prisma.transaction.count({ where }),
   ]);

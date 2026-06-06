@@ -62,10 +62,14 @@ dashboard.get("/summary", async (c) => {
 
   // ─── Budget health percentage ────────────────────────────────
   // Asumsikan budget = total pemasukan bulan ini, health = (income - expense) / income
+  // Jika tidak ada pemasukan tapi ada pengeluaran → 0% (Kritis)
+  // Jika tidak ada pemasukan dan tidak ada pengeluaran → 100% (belum ada aktivitas)
   const budgetHealth =
     totalIncome > 0
       ? Math.round(((totalIncome - totalExpense) / totalIncome) * 100)
-      : 100;
+      : totalExpense > 0
+        ? 0
+        : 100;
   const healthLabel =
     budgetHealth >= 70
       ? "Sangat Baik"
@@ -134,22 +138,28 @@ dashboard.get("/summary", async (c) => {
   // ─── Smart AI Insight (Cached 12 hours) ──────────────────────
   let aiInsight = "";
   try {
-    const userDb = await prisma.user.findUnique({ where: { id: userId }, select: { aiInsight: true, aiInsightUpdatedAt: true } });
+    const userDb = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { aiInsight: true, aiInsightUpdatedAt: true },
+    });
     const nowMs = Date.now();
     const lastUpdateMs = userDb?.aiInsightUpdatedAt?.getTime() || 0;
     const hoursSinceUpdate = (nowMs - lastUpdateMs) / (1000 * 60 * 60);
 
     if (hoursSinceUpdate > 12 || !userDb?.aiInsight) {
       // Generate new insight
-      const prompt = `Kamu AI Catatin. Analisis singkat keuangan user bulan ini: Pemasukan Rp${totalIncome.toLocaleString('id-ID')}, Pengeluaran Rp${totalExpense.toLocaleString('id-ID')}. Kesehatan budget: ${budgetHealth}% (${healthLabel}). Berikan 1 kalimat Insight proaktif yang ramah, memotivasi, atau menegur jika boros (Maks 15-20 kata, gunakan emoji, bahasa gaul santai/asik). Jangan basa-basi.`;
-      
-      const aiResponse = await aiManager.chat([{ role: "user", content: prompt }], { vision: false });
-      aiInsight = aiResponse.content.trim().replace(/^["']|["']$/g, '');
+      const prompt = `Kamu AI Catatin. Analisis singkat keuangan user bulan ini: Pemasukan Rp${totalIncome.toLocaleString("id-ID")}, Pengeluaran Rp${totalExpense.toLocaleString("id-ID")}. Kesehatan budget: ${budgetHealth}% (${healthLabel}). Berikan 1 kalimat Insight proaktif yang ramah, memotivasi, atau menegur jika boros (Maks 15-20 kata, gunakan emoji, bahasa gaul santai/asik). Jangan basa-basi.`;
+
+      const aiResponse = await aiManager.chat(
+        [{ role: "user", content: prompt }],
+        { vision: false },
+      );
+      aiInsight = aiResponse.content.trim().replace(/^["']|["']$/g, "");
 
       // Simpan ke DB
       await prisma.user.update({
         where: { id: userId },
-        data: { aiInsight, aiInsightUpdatedAt: new Date() }
+        data: { aiInsight, aiInsightUpdatedAt: new Date() },
       });
     } else {
       aiInsight = userDb.aiInsight;

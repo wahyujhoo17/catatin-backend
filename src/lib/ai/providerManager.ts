@@ -31,11 +31,15 @@ const PROVIDER_DEFAULTS: Record<
     visionModel: "llama-3.2-90b-vision-preview",
     baseUrl: "https://api.groq.com/openai/v1",
   },
+  gemini: {
+    textModel: "gemini-2.5-flash",
+    visionModel: "gemini-2.5-flash",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+  },
 };
 
-// ─── Order of providers to try ────────────────────────────────
-// Groq first (free/fast), then DeepSeek (cheap), then OpenRouter (fallback)
-const PROVIDER_ORDER: ProviderName[] = ["groq", "deepseek", "openrouter"];
+// Groq first (free/fast), then DeepSeek (cheap), then Gemini (free limit), then OpenRouter (fallback)
+const PROVIDER_ORDER: ProviderName[] = ["groq", "deepseek", "gemini", "openrouter"];
 
 // ─── Redis keys ───────────────────────────────────────────────
 function rateLimitKey(provider: string, keyIndex: number): string {

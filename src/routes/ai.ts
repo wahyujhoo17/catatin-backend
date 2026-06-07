@@ -803,5 +803,56 @@ aiRoutes.get("/providers", async (c) => {
     status: "ok",
   });
 });
+// ─── GET /api/ai/chat/history — Fetch chat history with pagination ──────────
+aiRoutes.get("/chat/history", async (c) => {
+  try {
+    const user = c.get("user");
+    const page = parseInt(c.req.query("page") || "1", 10);
+    const limit = parseInt(c.req.query("limit") || "20", 10);
+    const skip = (page - 1) * limit;
+
+    const messages = await prisma.aiMessage.findMany({
+      where: { userId: user.userId },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: limit,
+    });
+
+    const total = await prisma.aiMessage.count({
+      where: { userId: user.userId },
+    });
+
+    // Format to match frontend Message interface
+    const formattedMessages = messages.map((m) => {
+      // Role is 'user' or 'assistant'. Frontend expects 'user' | 'bot'
+      const type = m.role.toLowerCase() === "user" ? "user" : "bot";
+      
+      // Time format HH:MM
+      const time = new Date(m.createdAt).toLocaleTimeString("id-ID", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      return {
+        id: m.id,
+        type,
+        text: m.content,
+        time,
+      };
+    });
+
+    return c.json({
+      messages: formattedMessages.reverse(), // reverse to show chronological order for the chunk
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (err: any) {
+    return c.json({ error: err.message || "Failed to fetch chat history" }, 500);
+  }
+});
 
 export default aiRoutes;

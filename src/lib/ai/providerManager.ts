@@ -22,8 +22,8 @@ const PROVIDER_DEFAULTS: Record<
     baseUrl: "https://api.deepseek.com",
   },
   openrouter: {
-    textModel: "openrouter/free",
-    visionModel: "openrouter/free",
+    textModel: "google/gemma-4-31b-it:free",
+    visionModel: "google/gemma-4-31b-it:free",
     baseUrl: "https://openrouter.ai/api/v1",
   },
   groq: {

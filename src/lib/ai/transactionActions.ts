@@ -1,7 +1,7 @@
 import prisma from "../prisma";
 
 export const processTransactionActions = async (content: string, userId: string, accounts: any[]) => {
-  const actionRegex = /\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction)\]([\s\S]*?)\[\/ACTION\]/g;
+  const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction)\s*\]([\s\S]*?)\[\/ACTION\]/g;
   let match;
   const processedEvents: any[] = [];
 

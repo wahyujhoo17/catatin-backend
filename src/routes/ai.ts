@@ -213,14 +213,16 @@ async function buildFinancialContext(
         `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
         `ATURAN DRAFT:\n` +
         `1. WAJIB SELALU keluarkan blok [ACTION:draft_transaction] di akhir pesan apapun yang terjadi.\n` +
-        `2. JIKA di struk tidak ada petunjuk dompet/akun, kosongkan accountId ("") DAN tambahkan baris ini di akhir pesan: [ASK_ACCOUNT:${accOptions}]`;
+        `2. Cek apakah di struk ada petunjuk dompet/akun dari daftar (abaikan huruf besar/kecil). Jika ada, otomatis isi accountId-nya.\n` +
+        `3. JIKA di struk TIDAK ADA petunjuk dompet/akun sama sekali, kosongkan accountId ("") DAN tambahkan baris ini di akhir pesan: [ASK_ACCOUNT:${accOptions}]`;
     } else {
       accountRule =
         `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
-        `ATURAN PENTING: Jika user mencatat transaksi tapi tidak menyebutkan akun spesifik:\n` +
-        `1. JANGAN keluarkan blok [ACTION].\n` +
-        `2. Tanya ramah: misalnya "Pemasukan sebesar RpXXX akan dimasukkan ke dompet mana? Silakan pilih di bawah:"\n` +
-        `3. WAJIB akhiri pesan dengan tepat baris ini di baris tersendiri: [ASK_ACCOUNT:${accOptions}]`;
+        `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
+        `1. Cek apakah tulisan user menyebutkan nama akun dari daftar di atas (ABAIKAN HURUF BESAR/KECIL, contoh "bri" berarti "BRI").\n` +
+        `2. JIKA ADA NAMA AKUN: WAJIB keluarkan blok [ACTION:record_transaction] menggunakan ID akun tersebut. JANGAN tanya lagi!\n` +
+        `3. JIKA SAMA SEKALI TIDAK ADA NAMA AKUN: JANGAN keluarkan blok [ACTION]. Tanya ke user akun mana yang mau dipakai, lalu akhiri pesan tepat dengan: [ASK_ACCOUNT:${accOptions}]\n` +
+        `4. Asumsikan default transaksi adalah PENGELUARAN (EXPENSE), kecuali kata-katanya jelas menyatakan pemasukan (gaji, bonus, refund, masuk).`;
     }
   }
 

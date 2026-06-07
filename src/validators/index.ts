@@ -50,16 +50,16 @@ export const resetPasswordSchema = z.object({
 // ─── TRANSACTION VALIDATORS ───────────────────────────────────
 
 export const createTransactionSchema = z.object({
-  accountId: z.string({ invalid_type_error: "ID Dompet tidak valid" }).optional().nullable(),
-  categoryId: z.string({ invalid_type_error: "ID Kategori tidak valid" }).optional().nullable(),
-  customerId: z.string({ invalid_type_error: "ID Pelanggan tidak valid" }).optional().nullable(),
-  type: z.enum(["INCOME", "EXPENSE", "DEBT", "DEBT_PAYMENT"], { invalid_type_error: "Jenis transaksi tidak valid", required_error: "Jenis transaksi wajib diisi" }),
-  amount: z.number({ invalid_type_error: "Nominal harus berupa angka", required_error: "Nominal wajib diisi" }).positive("Jumlah harus lebih dari 0"),
-  description: z.string({ invalid_type_error: "Deskripsi harus berupa teks" }).max(500, "Deskripsi terlalu panjang").optional().nullable(),
-  note: z.string({ invalid_type_error: "Catatan harus berupa teks" }).max(1000, "Catatan terlalu panjang").optional().nullable(),
-  method: z.string({ invalid_type_error: "Metode pembayaran tidak valid" }).optional().nullable(),
-  source: z.enum(["CHAT", "SCAN", "MANUAL"], { invalid_type_error: "Sumber transaksi tidak valid" }).default("MANUAL"),
-  date: z.string({ invalid_type_error: "Format tanggal tidak valid" }).datetime({ message: "Format waktu tidak valid" }).optional().nullable(),
+  accountId: z.string().optional().nullable(),
+  categoryId: z.string().optional().nullable(),
+  customerId: z.string().optional().nullable(),
+  type: z.enum(["INCOME", "EXPENSE", "DEBT", "DEBT_PAYMENT"]),
+  amount: z.number().positive("Jumlah harus lebih dari 0"),
+  description: z.string().max(500, "Deskripsi terlalu panjang").optional().nullable(),
+  note: z.string().max(1000, "Catatan terlalu panjang").optional().nullable(),
+  method: z.string().optional().nullable(),
+  source: z.enum(["CHAT", "SCAN", "MANUAL"]).default("MANUAL"),
+  date: z.string().datetime({ message: "Format waktu tidak valid" }).optional().nullable(),
 });
 
 // ─── ACCOUNT VALIDATORS ───────────────────────────────────────

@@ -260,6 +260,9 @@ class AIProviderManager {
           await this.trackUsage(providerName, index);
           key.failures = 0; // reset on success
 
+          const taskType = options.vision ? "Vision OCR" : "Chat";
+          console.log(`[AI] ${taskType} completed via ${providerName} (${model})`);
+
           return {
             provider: providerName,
             model,
@@ -363,6 +366,9 @@ class AIProviderManager {
             max_tokens: options.maxTokens ?? 2048,
             stream: true,
           });
+
+          const taskType = options.vision ? "Vision OCR" : "Chat";
+          console.log(`[AI] Streaming ${taskType} started via ${providerName} (${model})`);
 
           let fullContent = "";
 

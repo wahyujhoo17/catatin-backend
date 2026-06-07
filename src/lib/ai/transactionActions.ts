@@ -97,8 +97,8 @@ export const processTransactionActions = async (content: string, userId: string,
           console.warn(`[AI] accountId ${accountId} tidak valid, abaikan`);
         }
       }
-      // Jika user hanya punya 1 akun, auto-assign
-      if (!finalAccountId && accounts.length === 1) {
+      // Auto-assign ke akun pertama (utama) jika AI tidak menyebutkan dompet
+      if (!finalAccountId && accounts.length > 0) {
         finalAccountId = accounts[0].id;
       }
 

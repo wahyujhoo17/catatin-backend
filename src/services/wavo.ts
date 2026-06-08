@@ -55,21 +55,30 @@ export async function sendWhatsApp(
 export async function sendOtpWhatsApp(
   to: string,
   otp: string,
-  type: "REGISTER" | "FORGOT_PASSWORD",
+  type: "REGISTER" | "FORGOT_PASSWORD" | "PROFILE_CHANGE",
 ): Promise<{ success: boolean; error?: string }> {
   const action =
     type === "REGISTER"
       ? "mendaftarkan akun Catatin"
-      : "mereset password Catatin";
+      : type === "FORGOT_PASSWORD"
+        ? "mereset password akun Catatin Anda"
+        : "mengonfirmasi perubahan data profil Catatin Anda";
 
-  const message = `🔐 *Catatin — Kode Verifikasi*
+  const title =
+    type === "REGISTER"
+      ? "Verifikasi Pendaftaran"
+      : type === "FORGOT_PASSWORD"
+        ? "Verifikasi Reset Password"
+        : "Verifikasi Perubahan Profil";
+
+  const message = `🔐 *Catatin — ${title}*
 
 Kode OTP Anda: *${otp}*
 
 Gunakan kode di atas untuk ${action}.
 Kode berlaku selama 10 menit.
 
-Jika Anda tidak melakukan permintaan ini, abaikan pesan ini.
+${type === "PROFILE_CHANGE" ? "Jika Anda tidak melakukan perubahan profil, segera amankan akun Anda.\n\n" : ""}Jika Anda tidak melakukan permintaan ini, abaikan pesan ini.
 
 — Catatin Financial Intelligence`;
 

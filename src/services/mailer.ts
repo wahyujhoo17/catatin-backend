@@ -82,17 +82,51 @@ function getTransporter(): nodemailer.Transporter | null {
 
 const FROM = `"Catatin" <${process.env.SMTP_FROM || "noreply@catatin.app"}>`;
 
-// ─── Send OTP Email (REGISTER only) ───────────────────────────
-export async function sendOtpEmail(to: string, otp: string): Promise<void> {
-  const content = `
-      <p>Halo,</p>
+// ─── Send OTP Email ───────────────────────────────────────────
+export async function sendOtpEmail(
+  to: string,
+  otp: string,
+  otpType: "REGISTER" | "FORGOT_PASSWORD" | "PROFILE_CHANGE" = "REGISTER",
+): Promise<void> {
+  const { title, body } = otpTemplate(otp, otpType);
+  const html = emailWrapper(title, body);
+  await doSend(to, title, html);
+}
+
+// ─── OTP template per type ────────────────────────────────────
+function otpTemplate(
+  otp: string,
+  type: "REGISTER" | "FORGOT_PASSWORD" | "PROFILE_CHANGE",
+): { title: string; body: string } {
+  switch (type) {
+    case "REGISTER":
+      return {
+        title: "Verifikasi Akun",
+        body: `<p>Halo,</p>
       <p>Terima kasih telah mendaftar di Catatin! Gunakan kode OTP berikut untuk verifikasi akun Anda:</p>
       <div class="otp-code">${otp}</div>
       <p>Kode ini berlaku selama <strong>10 menit</strong>.</p>
-      <p style="color: #8e8ea0; font-size: 13px;">Jika Anda tidak melakukan pendaftaran, abaikan email ini.</p>`;
-
-  const html = emailWrapper("Verifikasi Akun", content);
-  await doSend(to, "Verifikasi Akun", html);
+      <p style="color: #8e8ea0; font-size: 13px;">Jika Anda tidak melakukan pendaftaran, abaikan email ini.</p>`,
+      };
+    case "FORGOT_PASSWORD":
+      return {
+        title: "Reset Password",
+        body: `<p>Halo,</p>
+      <p>Kami menerima permintaan reset password untuk akun Catatin Anda. Gunakan kode OTP berikut untuk melanjutkan:</p>
+      <div class="otp-code">${otp}</div>
+      <p>Kode ini berlaku selama <strong>10 menit</strong>.</p>
+      <p style="color: #8e8ea0; font-size: 13px;">Jika Anda tidak meminta reset password, abaikan email ini — akun Anda tetap aman.</p>`,
+      };
+    case "PROFILE_CHANGE":
+      return {
+        title: "Verifikasi Perubahan Profil",
+        body: `<p>Halo,</p>
+      <p>Kami menerima permintaan perubahan data profil di akun Catatin Anda. Gunakan kode OTP berikut untuk mengonfirmasi perubahan:</p>
+      <div class="otp-code">${otp}</div>
+      <p>Kode ini berlaku selama <strong>10 menit</strong>.</p>
+      <p style="color: #8e8ea0; font-size: 13px;">Jika Anda tidak melakukan perubahan profil, segera amankan akun Anda dengan mengganti password.</p>`,
+      };
+  }
 }
 
 // ─── Send Recovery Email (link, not OTP) ──────────────────────

@@ -6,7 +6,7 @@ interface OtpWhatsAppJob {
   type: "OTP";
   to: string;
   otp: string;
-  otpType: "REGISTER" | "FORGOT_PASSWORD";
+  otpType: "REGISTER" | "FORGOT_PASSWORD" | "PROFILE_CHANGE";
 }
 
 interface GenericWhatsAppJob {

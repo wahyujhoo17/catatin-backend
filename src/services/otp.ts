@@ -5,7 +5,7 @@ export interface SendOtpParams {
   to: string; // email
   phone?: string; // phone number for WA
   otp: string;
-  type: "REGISTER" | "FORGOT_PASSWORD";
+  type: "REGISTER" | "FORGOT_PASSWORD" | "PROFILE_CHANGE";
 }
 
 // ─── Send OTP via all available channels (queued) ─────────────
@@ -20,6 +20,7 @@ export async function sendOtpNotification(
     type: "OTP",
     to,
     otp,
+    otpType: type,
   });
 
   // Queue WhatsApp jika nomor HP tersedia
@@ -28,6 +29,7 @@ export async function sendOtpNotification(
       type: "OTP",
       to: phone,
       otp,
+      otpType: type,
     });
   }
 

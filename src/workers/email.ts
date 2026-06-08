@@ -6,6 +6,7 @@ interface OtpEmailJob {
   type: "OTP";
   to: string;
   otp: string;
+  otpType?: "REGISTER" | "FORGOT_PASSWORD" | "PROFILE_CHANGE";
 }
 
 interface GenericEmailJob {
@@ -24,7 +25,7 @@ export function startEmailWorker(): void {
 
     switch (data.type) {
       case "OTP":
-        await sendOtpEmail(data.to, data.otp);
+        await sendOtpEmail(data.to, data.otp, data.otpType);
         break;
       case "GENERIC":
         await sendEmail(data.to, data.subject, data.html);

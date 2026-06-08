@@ -26,11 +26,13 @@ export const registerSchema = z.object({
   name: z.string().min(2, "Nama minimal 2 karakter").max(100),
   email: emailOrPhone,
   password: z.string().min(6, "Password minimal 6 karakter"),
+  cfTurnstileToken: z.string().optional(),
 });
 
 export const loginSchema = z.object({
   email: emailOrPhone,
   password: z.string().min(1, "Password wajib diisi"),
+  cfTurnstileToken: z.string().optional(),
 });
 
 export const verifyOtpSchema = z.object({
@@ -40,6 +42,7 @@ export const verifyOtpSchema = z.object({
 
 export const forgotPasswordSchema = z.object({
   email: emailOrPhone,
+  cfTurnstileToken: z.string().optional(),
 });
 
 export const resetPasswordSchema = z.object({
@@ -55,11 +58,19 @@ export const createTransactionSchema = z.object({
   customerId: z.string().optional().nullable(),
   type: z.enum(["INCOME", "EXPENSE", "DEBT", "DEBT_PAYMENT"]),
   amount: z.number().positive("Jumlah harus lebih dari 0"),
-  description: z.string().max(500, "Deskripsi terlalu panjang").optional().nullable(),
+  description: z
+    .string()
+    .max(500, "Deskripsi terlalu panjang")
+    .optional()
+    .nullable(),
   note: z.string().max(1000, "Catatan terlalu panjang").optional().nullable(),
   method: z.string().optional().nullable(),
   source: z.enum(["CHAT", "SCAN", "MANUAL"]).default("MANUAL"),
-  date: z.string().datetime({ message: "Format waktu tidak valid" }).optional().nullable(),
+  date: z
+    .string()
+    .datetime({ message: "Format waktu tidak valid" })
+    .optional()
+    .nullable(),
 });
 
 // ─── ACCOUNT VALIDATORS ───────────────────────────────────────

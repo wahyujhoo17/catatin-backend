@@ -11,7 +11,9 @@ import {
 import { authMiddleware } from "../middleware/auth";
 import { sendOtpNotification } from "../services/otp";
 import { sendRecoveryEmail } from "../services/mailer";
+import { sendWhatsApp } from "../services/wavo";
 import { normalizePhone } from "../lib/phone";
+import { verifyTurnstile } from "../lib/turnstile";
 import {
   checkLoginLockout,
   recordLoginAttempt,
@@ -176,7 +178,21 @@ auth.post("/register", async (c) => {
     return c.json({ error: parsed.error.issues[0].message }, 400);
   }
 
-  const { name, email: emailOrPhone, password: rawPassword } = parsed.data;
+  const {
+    name,
+    email: emailOrPhone,
+    password: rawPassword,
+    cfTurnstileToken,
+  } = parsed.data;
+
+  // ─── Turnstile verification ──────────────────────────────
+  const turnstile = await verifyTurnstile(cfTurnstileToken);
+  if (!turnstile.success) {
+    return c.json(
+      { error: turnstile.error || "Verifikasi keamanan gagal" },
+      400,
+    );
+  }
 
   // Deteksi: input adalah email atau nomor HP?
   let email: string;
@@ -379,7 +395,16 @@ auth.post("/login", async (c) => {
     return c.json({ error: parsed.error.issues[0].message }, 400);
   }
 
-  const { email: emailOrPhone, password } = parsed.data;
+  const { email: emailOrPhone, password, cfTurnstileToken } = parsed.data;
+
+  // ─── Turnstile verification ──────────────────────────────
+  const turnstile = await verifyTurnstile(cfTurnstileToken);
+  if (!turnstile.success) {
+    return c.json(
+      { error: turnstile.error || "Verifikasi keamanan gagal" },
+      400,
+    );
+  }
 
   // --- Brute-force check (Redis-based) ---
   const ip =
@@ -484,17 +509,30 @@ auth.post("/forgot-password", async (c) => {
     return c.json({ error: parsed.error.issues[0].message }, 400);
   }
 
-  const { email: emailOrPhone } = parsed.data;
+  const { email: emailOrPhone, cfTurnstileToken } = parsed.data;
+
+  // ─── Turnstile verification ──────────────────────────────
+  const turnstile = await verifyTurnstile(cfTurnstileToken);
+  if (!turnstile.success) {
+    return c.json(
+      { error: turnstile.error || "Verifikasi keamanan gagal" },
+      400,
+    );
+  }
 
   // Cari user by email ATAU by nomor HP
   let user;
+  let isPhoneInput = false;
+  let normalizedPhone: string | null = null;
+
   if (isEmail(emailOrPhone)) {
     user = await prisma.user.findUnique({
       where: { email: emailOrPhone.toLowerCase().trim() },
     });
   } else {
-    const normalizedPhone = normalizePhone(emailOrPhone);
+    normalizedPhone = normalizePhone(emailOrPhone);
     if (normalizedPhone) {
+      isPhoneInput = true;
       user = await prisma.user.findFirst({
         where: { phone: normalizedPhone },
       });
@@ -503,7 +541,41 @@ auth.post("/forgot-password", async (c) => {
 
   if (!user) return c.json({ error: "Akun tidak ditemukan" }, 404);
 
-  // Generate recovery token (15 min expiry)
+  // Google-only user — tidak bisa reset password
+  if (!user.password) {
+    return c.json(
+      {
+        error: "Akun ini menggunakan Google. Silakan login dengan Google.",
+      },
+      400,
+    );
+  }
+
+  // ─── Input nomor HP → kirim link reset via WhatsApp ──────────
+  if (isPhoneInput && normalizedPhone) {
+    const resetToken = signResetToken({
+      userId: user.id,
+      email: user.email,
+      purpose: "reset-password",
+    });
+
+    const frontendUrl =
+      process.env.FRONTEND_URL || "https://catatin.lumicloud.my.id";
+    const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
+
+    // Kirim link via WhatsApp
+    await sendWhatsApp(
+      normalizedPhone,
+      `🔐 *Catatin — Reset Password*\n\nKlik link berikut untuk membuat password baru:\n${resetLink}\n\nLink berlaku selama 15 menit.\nJika Anda tidak meminta reset, abaikan pesan ini.\n\n— Catatin Financial Intelligence`,
+    );
+
+    return c.json({
+      message: "Link reset password telah dikirim via WhatsApp",
+      type: "phone",
+    });
+  }
+
+  // ─── Input email → kirim recovery link ────────────────────────
   const resetToken = signResetToken({
     userId: user.id,
     email: user.email,
@@ -517,28 +589,9 @@ auth.post("/forgot-password", async (c) => {
   // Kirim email recovery link
   await sendRecoveryEmail(user.email, resetLink);
 
-  // Kirim WhatsApp OTP juga (opsional)
-  const phone = normalizePhone(user.phone);
-  if (phone) {
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    await prisma.otpCode.create({
-      data: {
-        userId: user.id,
-        code: otp,
-        type: "FORGOT_PASSWORD",
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      },
-    });
-    await sendOtpNotification({
-      to: user.email,
-      phone,
-      otp,
-      type: "FORGOT_PASSWORD",
-    });
-  }
-
   return c.json({
     message: "Link reset password telah dikirim ke email Anda",
+    type: "email",
   });
 });
 

@@ -108,7 +108,7 @@ function isLikelyTransaction(message: string): boolean {
 async function buildFinancialContext(
   userId: string,
   includeFullContext: boolean = true,
-  draftMode: boolean = false
+  draftMode: boolean = false,
 ): Promise<FinancialContext> {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -245,15 +245,18 @@ async function buildFinancialContext(
   if (includeFullContext) {
     actionFormat = "FORMAT AKSI:\n";
     if (draftMode) {
-      actionFormat += '1. Draft Transaksi (WAJIB ADA): [ACTION:draft_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan","category":"Makanan","accountId":"<id_atau_kosong>"}[/ACTION]\n' +
-      "- Tentukan mandiri (biasanya pengeluaran). Jika struk ada info bank, otomatis pilih accountId.\n";
+      actionFormat +=
+        '1. Draft Transaksi (WAJIB ADA): [ACTION:draft_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan Siang Nasi Padang","category":"Makanan","accountId":"<id_atau_kosong>"}[/ACTION]\n' +
+        "- Tentukan mandiri (biasanya pengeluaran). Jika struk ada info bank, otomatis pilih accountId.\n";
     } else {
-      actionFormat += '1. Mencatat: [ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
-      '2. Menghapus: [ACTION:delete_transaction]{"id":"<id_transaksi_dari_data>"}[/ACTION]\n' +
-      '3. Mengubah: [ACTION:update_transaction]{"id":"<id>","amount":60000,"description":"Makan besar"}[/ACTION]\n';
+      actionFormat +=
+        '1. Mencatat: [ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan Siang Nasi Padang","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
+        '2. Menghapus: [ACTION:delete_transaction]{"id":"<id_transaksi_dari_data>"}[/ACTION]\n' +
+        '3. Mengubah: [ACTION:update_transaction]{"id":"<id>","amount":60000,"description":"Makan Malam di Restoran"}[/ACTION]\n';
     }
-    actionFormat += "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
-      "- type: INCOME|EXPENSE | amount: angka | description: singkat jelas\n" +
+    actionFormat +=
+      "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
+      "- type: INCOME|EXPENSE | amount: angka | description: HARUS deskriptif lengkap dengan awalan konteks, contoh: 'Pembelian Thai Tea Kenangan', 'Pembayaran Domain obs.my.id', 'Makan Siang di Warteg', 'Bayar Parkir Mall', 'Top up GoPay 50rb', 'Transfer ke Ibu'. JANGAN pakai deskripsi terlalu pendek seperti hanya 'Thai Tea'.\n" +
       `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
       "- accountId: WAJIB dari daftar RAHASIA. JANGAN bocorkan!\n\n";
 
@@ -264,7 +267,9 @@ async function buildFinancialContext(
     "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Diluar itu tolak sopan.\n\n" +
     actionFormat +
     "Aturan respons:\n" +
-    (draftMode ? "" : "- Jangan keluarkan [ACTION] jika amount atau description belum lengkap. Tanya dulu.\n") +
+    (draftMode
+      ? ""
+      : "- Jangan keluarkan [ACTION] jika amount atau description belum lengkap. Tanya dulu.\n") +
     "- Jika semua data lengkap, beri pesan sukses + [ACTION] di akhir.\n" +
     "- Nada: ramah, hangat, seperti teman bantu catat keuangan. Jangan kaku seperti robot.\n" +
     "- Jika ditanya saldo akun spesifik: jawab HANYA akun itu. Jangan sebut total atau akun lain.\n" +
@@ -689,20 +694,24 @@ aiRoutes.post("/chat/sync", async (c) => {
     if (image) {
       // ─── 2-Step Pipeline: Vision OCR -> Text Logic ───
       console.log("[AI] Memulai pipeline 2-tahap (Vision -> Text)");
-      
+
       // Step 1: Vision OCR
-      const ocrSystemPrompt: ChatMessage = { 
-        role: "system", 
-        content: "Kamu adalah asisten OCR. Ekstrak seluruh teks dan informasi dari gambar struk/dokumen ini dengan akurat. JANGAN tambahkan penjelasan atau format apapun, cukup ketik ulang isi teksnya." 
+      const ocrSystemPrompt: ChatMessage = {
+        role: "system",
+        content:
+          "Kamu adalah asisten OCR. Ekstrak seluruh teks dan informasi dari gambar struk/dokumen ini dengan akurat. JANGAN tambahkan penjelasan atau format apapun, cukup ketik ulang isi teksnya.",
       };
-      const ocrUserMessage: ChatMessage = { 
-        role: "user", 
-        content: [{ type: "image_url", image_url: { url: image } }] 
+      const ocrUserMessage: ChatMessage = {
+        role: "user",
+        content: [{ type: "image_url", image_url: { url: image } }],
       };
-      
+
       let extractedText = "";
       try {
-        const ocrResult = await aiManager.chat([ocrSystemPrompt, ocrUserMessage], { vision: true });
+        const ocrResult = await aiManager.chat(
+          [ocrSystemPrompt, ocrUserMessage],
+          { vision: true },
+        );
         extractedText = ocrResult.content;
         console.log("[AI] Hasil OCR:", extractedText.slice(0, 100) + "...");
       } catch (ocrErr) {
@@ -711,23 +720,33 @@ aiRoutes.post("/chat/sync", async (c) => {
       }
 
       // Step 2: Text Logic
-      const finalUserMessage: ChatMessage = { 
-        role: "user", 
-        content: `${message}\n\n=== TEKS STRUK ===\n${extractedText}` 
+      const finalUserMessage: ChatMessage = {
+        role: "user",
+        content: `${message}\n\n=== TEKS STRUK ===\n${extractedText}`,
       };
 
       if (customProvider) {
-        content = await callCustomProviderSync([systemPrompt, finalUserMessage], customProvider);
+        content = await callCustomProviderSync(
+          [systemPrompt, finalUserMessage],
+          customProvider,
+        );
       } else {
-        const result = await aiManager.chat([systemPrompt, finalUserMessage], { vision: false });
+        const result = await aiManager.chat([systemPrompt, finalUserMessage], {
+          vision: false,
+        });
         content = result.content;
       }
     } else {
       // ─── Normal 1-Step Pipeline (Hanya Teks) ───
       if (customProvider) {
-        content = await callCustomProviderSync([systemPrompt, userMessage], customProvider);
+        content = await callCustomProviderSync(
+          [systemPrompt, userMessage],
+          customProvider,
+        );
       } else {
-        const result = await aiManager.chat([systemPrompt, userMessage], { vision: false });
+        const result = await aiManager.chat([systemPrompt, userMessage], {
+          vision: false,
+        });
         content = result.content;
       }
     }
@@ -826,7 +845,7 @@ aiRoutes.get("/chat/history", async (c) => {
     const formattedMessages = messages.map((m) => {
       // Role is 'user' or 'assistant'. Frontend expects 'user' | 'bot'
       const type = m.role.toLowerCase() === "user" ? "user" : "bot";
-      
+
       // Time format HH:MM
       const time = new Date(m.createdAt).toLocaleTimeString("id-ID", {
         hour: "2-digit",
@@ -851,7 +870,10 @@ aiRoutes.get("/chat/history", async (c) => {
       },
     });
   } catch (err: any) {
-    return c.json({ error: err.message || "Failed to fetch chat history" }, 500);
+    return c.json(
+      { error: err.message || "Failed to fetch chat history" },
+      500,
+    );
   }
 });
 
@@ -859,7 +881,7 @@ aiRoutes.get("/chat/history", async (c) => {
 aiRoutes.delete("/chat/clear", async (c) => {
   try {
     const user = c.get("user");
-    
+
     await prisma.$transaction([
       prisma.aiMessage.deleteMany({
         where: { userId: user.userId },
@@ -869,9 +891,15 @@ aiRoutes.delete("/chat/clear", async (c) => {
       }),
     ]);
 
-    return c.json({ status: "success", message: "History chat berhasil dihapus" });
+    return c.json({
+      status: "success",
+      message: "History chat berhasil dihapus",
+    });
   } catch (err: any) {
-    return c.json({ error: err.message || "Failed to clear chat history" }, 500);
+    return c.json(
+      { error: err.message || "Failed to clear chat history" },
+      500,
+    );
   }
 });
 

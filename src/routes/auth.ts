@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import bcrypt from "bcrypt";
+import { OAuth2Client } from "google-auth-library";
 import prisma from "../lib/prisma";
 import {
   signAccessToken,
@@ -26,10 +27,146 @@ import {
 
 const auth = new Hono();
 
+// ─── Google OAuth Client ──────────────────────────────────────
+const googleClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI,
+);
+
 // ─── Helper: deteksi email vs nomor HP ────────────────────────
 function isEmail(val: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val);
 }
+
+// ─── Helper: buat token & session ─────────────────────────────
+async function createSession(userId: string, email: string) {
+  const token = signAccessToken({ userId, email });
+  const refreshToken = signRefreshToken({ userId, email });
+
+  await prisma.session.create({
+    data: {
+      userId,
+      refreshToken,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    },
+  });
+
+  return { token, refreshToken };
+}
+
+// ─── GOOGLE OAuth: Redirect ke consent screen ─────────────────
+auth.get("/google", (c) => {
+  const authUrl = googleClient.generateAuthUrl({
+    access_type: "offline",
+    scope: [
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ],
+    prompt: "select_account",
+  });
+  return c.redirect(authUrl);
+});
+
+// ─── GOOGLE OAuth: Callback ───────────────────────────────────
+auth.get("/google/callback", async (c) => {
+  const code = c.req.query("code");
+  if (!code) {
+    const error = c.req.query("error");
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    return c.redirect(
+      `${frontendUrl}/login?error=${encodeURIComponent(error || "Google auth dibatalkan")}`,
+    );
+  }
+
+  try {
+    // Tukar code dengan token
+    const { tokens } = await googleClient.getToken(code);
+    const idToken = tokens.id_token;
+
+    if (!idToken) {
+      throw new Error("Gagal mendapatkan token dari Google");
+    }
+
+    // Verifikasi & decode id_token
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      throw new Error("Gagal mendapatkan info user dari Google");
+    }
+
+    const googleId = payload.sub;
+    const email = payload.email.toLowerCase().trim();
+    const name = payload.name || payload.email.split("@")[0];
+    const avatar = payload.picture || null;
+
+    // Cek apakah user sudah ada by googleId
+    let user = await prisma.user.findUnique({ where: { googleId } });
+
+    if (!user) {
+      // Cek apakah email sudah terdaftar (manual register)
+      const existingByEmail = await prisma.user.findUnique({
+        where: { email },
+      });
+
+      if (existingByEmail) {
+        // Link Google account ke existing user
+        user = await prisma.user.update({
+          where: { id: existingByEmail.id },
+          data: {
+            googleId,
+            avatar: avatar || existingByEmail.avatar,
+          },
+        });
+      } else {
+        // Buat user baru
+        user = await prisma.user.create({
+          data: {
+            email,
+            googleId,
+            name,
+            avatar,
+            // password null — Google users have no password
+          },
+        });
+
+        // Buat OTP dummy supaya dianggap "verified"
+        await prisma.otpCode.create({
+          data: {
+            userId: user.id,
+            code: "GOOGLE",
+            type: "REGISTER",
+            used: true,
+            expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+          },
+        });
+      }
+    }
+
+    const { token, refreshToken } = await createSession(user.id, user.email);
+
+    // Redirect ke frontend callback page
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const callbackUrl = new URL(`${frontendUrl}/auth/callback`);
+    callbackUrl.searchParams.set("token", token);
+    callbackUrl.searchParams.set("refreshToken", refreshToken);
+    callbackUrl.searchParams.set("name", user.name);
+    callbackUrl.searchParams.set("email", user.email);
+    callbackUrl.searchParams.set("mode", user.mode || "PERSONAL");
+
+    return c.redirect(callbackUrl.toString());
+  } catch (err) {
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const errorMsg = err instanceof Error ? err.message : "Google auth gagal";
+    return c.redirect(
+      `${frontendUrl}/login?error=${encodeURIComponent(errorMsg)}`,
+    );
+  }
+});
 
 // ─── REGISTER ─────────────────────────────────────────────────
 auth.post("/register", async (c) => {
@@ -280,6 +417,14 @@ auth.post("/login", async (c) => {
   if (!user) {
     await recordLoginAttempt(lockoutKey, ip, false);
     return c.json({ error: "Email atau password salah" }, 401);
+  }
+
+  // Google-only user — tidak bisa login dengan password
+  if (!user.password) {
+    return c.json(
+      { error: "Akun ini menggunakan Google. Silakan login dengan Google." },
+      400,
+    );
   }
 
   const valid = await bcrypt.compare(password, user.password);

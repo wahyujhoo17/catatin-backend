@@ -15,9 +15,9 @@ function emailWrapper(title: string, content: string): string {
   <style>
     body { font-family: 'Inter', -apple-system, sans-serif; background: #f5f5f7; margin: 0; padding: 0; }
     .container { max-width: 480px; margin: 40px auto; background: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
-    .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 32px; text-align: center; }
+    .header { background: #f0f0f5; padding: 32px; text-align: center; }
     .header img { height: 48px; width: auto; margin-bottom: 8px; }
-    .header h1 { color: #ffffff; font-size: 20px; margin: 8px 0 0; font-weight: 600; }
+    .header h1 { color: #1a1a2e; font-size: 20px; margin: 8px 0 0; font-weight: 600; }
     .body { padding: 32px; }
     .body p { color: #4a4a6a; font-size: 15px; line-height: 1.6; margin: 0 0 16px; }
     .cta-button { display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #4f3786 0%, #63597c 100%); color: #ffffff; text-decoration: none; border-radius: 12px; font-size: 16px; font-weight: 600; margin: 16px 0; }

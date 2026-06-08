@@ -855,4 +855,24 @@ aiRoutes.get("/chat/history", async (c) => {
   }
 });
 
+// ─── DELETE /api/ai/chat/clear — Clear all chat history ──────────
+aiRoutes.delete("/chat/clear", async (c) => {
+  try {
+    const user = c.get("user");
+    
+    await prisma.$transaction([
+      prisma.aiMessage.deleteMany({
+        where: { userId: user.userId },
+      }),
+      prisma.aiConversation.deleteMany({
+        where: { userId: user.userId },
+      }),
+    ]);
+
+    return c.json({ status: "success", message: "History chat berhasil dihapus" });
+  } catch (err: any) {
+    return c.json({ error: err.message || "Failed to clear chat history" }, 500);
+  }
+});
+
 export default aiRoutes;

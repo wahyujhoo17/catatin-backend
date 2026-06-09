@@ -315,6 +315,13 @@ function parseTransactionFromMessage(message: string): {
   return { amount, description: desc, category, type };
 }
 
+// ─── Pre-filter: cheap regex check sebelum LLM classifier ──
+// Skip LLM call untuk pesan yang jelas-jelas bukan transaksi (query, saldo, sapaan)
+function hasPotentialAmount(message: string): boolean {
+  // Amount dengan suffix: 4jt, 50rb, 100k, 2.5juta, 50000
+  return /\b\d[\d.,]*(?:\s*(?:jt|juta|rb|ribu|[kK])\b)?/.test(message);
+}
+
 // ─── LLM Transaction Classifier ────────────────────────────
 // Gunakan LLM untuk klasifikasi transaksi — lebih pintar dari regex,
 // bisa handle "4 jt", "gaji masuk", "supriadi bayar hutang", dll.
@@ -1241,7 +1248,10 @@ aiRoutes.post("/chat", async (c) => {
   });
 
   // ─── LLM Classifier: deteksi & ekstrak transaksi dari pesan ──
-  const txClass = await classifyTransactionMessage(message, accounts);
+  // Pre-filter: skip LLM classifier jika tidak ada indikasi amount
+  const txClass = hasPotentialAmount(message)
+    ? await classifyTransactionMessage(message, accounts)
+    : null;
 
   // ─── Path A: Complete transaction → save langsung, tanpa AI ──
   if (

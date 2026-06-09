@@ -56,18 +56,16 @@ export async function sendPushNotificationDirect(
     return { sent: 0, failed: 0 };
   }
 
-  // Kirim multicast message
+  // Kirim multicast message (webpush only — jangan pakai top-level `notification`
+  // karena Firebase FCM akan menampilkan notifikasi ganda).
   const message = {
-    notification: {
-      title: payload.title,
-      body: payload.body,
-      ...(payload.icon ? { imageUrl: payload.icon } : {}),
-    },
     webpush: {
       fcmOptions: {
         link: payload.clickAction || "/dashboard",
       },
       notification: {
+        title: payload.title,
+        body: payload.body,
         icon: payload.icon || "/icon-192.png",
         badge: "/icon-192.png",
         requireInteraction: true,

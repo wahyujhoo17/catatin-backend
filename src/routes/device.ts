@@ -8,23 +8,31 @@ const device = new Hono();
 device.post("/", authMiddleware, async (c) => {
   try {
     const user = c.get("user");
-    const { token } = await c.req.json();
+    const { token, platform } = await c.req.json();
 
     if (!token || typeof token !== "string") {
       return c.json({ error: "Token tidak valid" }, 400);
     }
+
+    // Deteksi platform: dari client, atau fallback ke "web"
+    const resolvedPlatform =
+      typeof platform === "string" &&
+      ["ios", "android", "web"].includes(platform)
+        ? platform
+        : "web";
 
     // Upsert: update jika token sudah ada, create jika belum
     await prisma.deviceToken.upsert({
       where: { token },
       update: {
         userId: user.userId,
+        platform: resolvedPlatform,
         updatedAt: new Date(),
       },
       create: {
         userId: user.userId,
         token,
-        platform: "web",
+        platform: resolvedPlatform,
       },
     });
 

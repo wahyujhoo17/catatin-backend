@@ -39,6 +39,7 @@ model User {
   customers       Customer[]
   aiMessages      AiMessage[]
   aiConversations AiConversation[]
+  deviceTokens    DeviceToken[]
 }
 
 model OtpCode {
@@ -216,5 +217,19 @@ model AiMessage {
   createdAt      DateTime       @default(now())
 
   @@index([conversationId])
+  @@index([userId])
+}
+
+// ─── PUSH NOTIFICATIONS (Firebase Cloud Messaging) ─────────────
+
+model DeviceToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  platform  String   @default("web") // web, ios, android
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([userId])
 }

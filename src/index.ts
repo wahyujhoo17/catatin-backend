@@ -19,6 +19,7 @@ import budgetRoutes from "./routes/budget";
 import aiRoutes from "./routes/ai";
 import settingsRoutes from "./routes/settings";
 import dashboardRoutes from "./routes/dashboard";
+import deviceRoutes from "./routes/device";
 
 const app = new Hono();
 
@@ -83,6 +84,7 @@ app.route("/api/budgets", budgetRoutes);
 app.route("/api/ai", aiRoutes);
 app.route("/api/settings", settingsRoutes);
 app.route("/api/dashboard", dashboardRoutes);
+app.route("/api/auth/device-token", deviceRoutes);
 
 // ─── START ────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || "4000");

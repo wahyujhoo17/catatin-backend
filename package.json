@@ -23,6 +23,7 @@
     "bull": "^4.16.5",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "firebase-admin": "^14.0.0",
     "google-auth-library": "^10.7.0",
     "hono": "^4.12.23",
     "ioredis": "^5.11.1",

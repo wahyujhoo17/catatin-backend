@@ -51,26 +51,87 @@ const DEFAULT_EXPENSE_CATS = [
   "Makanan",
   "Minuman",
   "Transportasi",
+  "Bensin",
+  "Parkir",
   "Belanja",
-  "Hiburan",
-  "Kesehatan",
-  "Pendidikan",
-  "Tagihan",
   "Pakaian",
+  "Skincare",
+  "Kesehatan",
+  "Obat-obatan",
+  "Olahraga",
+  "Pendidikan",
+  "Buku",
+  "Tagihan Listrik",
+  "Tagihan Air",
+  "Internet",
+  "Pulsa",
+  "Sewa",
+  "Cicilan",
+  "Asuransi",
+  "Pajak",
   "Rumah Tangga",
-  "Hadiah",
-  "Donasi",
+  "Perawatan Hewan",
+  "Hiburan",
+  "Game",
+  "Streaming",
   "Langganan",
   "Perjalanan",
+  "Hotel",
+  "Makan di Restoran",
+  "Kopi & Kafe",
+  "Hadiah",
+  "Donasi",
+  "Keagamaan",
+  "Anak",
+  "Tabungan",
+  "Investasi",
+  "Biaya Bank",
+  "Biaya Admin",
+  "Dana Darurat",
   "Lainnya",
 ];
 const DEFAULT_INCOME_CATS = [
   "Gaji",
   "Bonus",
+  "THR",
+  "Komisi",
+  "Lembur",
   "Freelance",
+  "Proyek",
+  "Konsultasi",
+  "Bisnis",
+  "Penjualan Produk",
+  "Penjualan Jasa",
   "Investasi",
+  "Dividen",
+  "Bunga Tabungan",
+  "Bunga Deposito",
+  "Capital Gain",
+  "Royalti",
+  "Sewa Properti",
+  "Sewa Kendaraan",
+  "Affiliate",
+  "Content Creator",
+  "YouTube",
+  "TikTok",
+  "Blog",
+  "Donasi",
   "Hadiah",
+  "Uang Saku",
+  "Tunjangan",
+  "Beasiswa",
   "Refund",
+  "Cashback",
+  "Reward",
+  "Poin Loyalitas",
+  "Klaim Asuransi",
+  "Piutang Dibayar",
+  "Pengembalian Pinjaman",
+  "Penjualan Aset",
+  "Penjualan Barang Bekas",
+  "Warisan",
+  "Hibah",
+  "Pendapatan Pasif",
   "Lainnya",
 ];
 
@@ -84,7 +145,7 @@ interface FinancialContext {
 function isLikelyTransaction(message: string): boolean {
   if (!message) return false;
   const text = message.toLowerCase();
-  const hasAmount = /\b\d[\d.,]*[kK]?\b/.test(text); // 50000, 50k, 50.000, 50rb
+  const hasAmount = /\b\d[\d.,]*(?:[kK]|rb)?\b/.test(text); // 50000, 50k, 50rb, 25.000
 
   // Kata kerja aksi: HARUS ada untuk dianggap transaksi baru
   const actionVerbs = [
@@ -102,6 +163,15 @@ function isLikelyTransaction(message: string): boolean {
     "habis",
     "keluar buat",
     "pakai buat",
+    // makan-minum
+    "makan",
+    "minum",
+    "sarapan",
+    "ngopi",
+    "nongkrong",
+    "cemilan",
+    "snack",
+    "ngemil",
     // income
     "terima",
     "dapat",
@@ -135,6 +205,217 @@ function isLikelyTransaction(message: string): boolean {
 
   // Transaksi baru = ada amount + ada kata kerja aksi + BUKAN query
   return hasAmount && hasActionVerb && !isQuery;
+}
+
+// ─── Parse transaction details from a message like "makan malam 45 rb" ──
+// Returns amount, description, category, type for direct DB insertion
+function parseTransactionFromMessage(message: string): {
+  amount: number;
+  description: string;
+  category: string;
+  type: "EXPENSE" | "INCOME";
+} | null {
+  const text = message.trim();
+
+  // Extract amount: "45 rb", "50k", "50.000", "50000", "12,5 rb", "12.5 rb"
+  const amountMatch = text.match(
+    /(\d[\d.,]*)\s*(?:rb|ribu|[kK])\b|(\d[\d.,]*)\b/,
+  );
+  if (!amountMatch) return null;
+
+  const rawNum = (amountMatch[1] || amountMatch[2])
+    .replace(/\./g, "")
+    .replace(/,/g, ".");
+  let amount = parseFloat(rawNum);
+  if (isNaN(amount) || amount <= 0) return null;
+
+  // Apply suffix multiplier
+  if (/\s*(?:rb|ribu|[kK])\b/i.test(text)) {
+    amount *= 1000;
+  }
+
+  // Infer type: income verbs → INCOME, else EXPENSE
+  const incomeVerbs = [
+    "terima",
+    "dapat",
+    "dapet",
+    "dibayar",
+    "masuk dari",
+    "gaji",
+    "bonus",
+    "freelance",
+  ];
+
+  // Pattern: "[NamaOrang] bayar hutang/utang" → someone pays debt TO you = INCOME
+  const isDebtRepaymentToMe =
+    /\b\w+\s+bayar\s+(hutang|utang)\b/i.test(text) ||
+    /\bbayar\s+(hutang|utang)\s+ke\s+saya\b/i.test(text);
+
+  const isIncome =
+    isDebtRepaymentToMe ||
+    incomeVerbs.some((v) => text.toLowerCase().includes(v));
+  const type: "EXPENSE" | "INCOME" = isIncome ? "INCOME" : "EXPENSE";
+
+  // Extract description: remove amount + suffix, clean up
+  let desc = text
+    .replace(/\d[\d.,]*\s*(?:rb|ribu|[kK])?\b/i, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!desc) desc = type === "EXPENSE" ? "Pengeluaran" : "Pemasukan";
+  // Capitalize each word
+  desc = desc.replace(/\b\w/g, (c) => c.toUpperCase());
+
+  // Infer category from keywords — depends on type
+  const expenseCatMap: Record<string, string> = {
+    makan: "Makanan",
+    sarapan: "Makanan",
+    cemilan: "Makanan",
+    snack: "Makanan",
+    ngemil: "Makanan",
+    jajan: "Makanan",
+    minum: "Minuman",
+    ngopi: "Minuman",
+    nongkrong: "Hiburan",
+    beli: "Belanja",
+    bayar: "Tagihan",
+    tagihan: "Tagihan",
+    ongkos: "Transportasi",
+    parkir: "Transportasi",
+    transport: "Transportasi",
+    topup: "Lainnya",
+    transfer: "Lainnya",
+    kirim: "Lainnya",
+  };
+  const incomeCatMap: Record<string, string> = {
+    gaji: "Gaji",
+    bonus: "Bonus",
+    freelance: "Freelance",
+    hadiah: "Hadiah",
+    refund: "Refund",
+    hutang: "Lainnya",
+    utang: "Lainnya",
+    bayar: "Lainnya", // "bayar hutang" dari orang lain → Lainnya
+  };
+
+  let category = "Lainnya";
+  const lower = text.toLowerCase();
+  const catMap = type === "INCOME" ? incomeCatMap : expenseCatMap;
+  // Check longest keywords first for better matching
+  const sortedKeys = Object.keys(catMap).sort((a, b) => b.length - a.length);
+  for (const kw of sortedKeys) {
+    if (lower.includes(kw)) {
+      category = catMap[kw];
+      break;
+    }
+  }
+
+  console.log(
+    `[AI] Parsed tx from message: amount=${amount} desc="${desc}" cat=${category} type=${type}`,
+  );
+  return { amount, description: desc, category, type };
+}
+
+// ─── LLM Transaction Classifier ────────────────────────────
+// Gunakan LLM untuk klasifikasi transaksi — lebih pintar dari regex,
+// bisa handle "4 jt", "gaji masuk", "supriadi bayar hutang", dll.
+async function classifyTransactionMessage(
+  message: string,
+  accounts: { id: string; name: string; type: string }[],
+): Promise<{
+  isTransaction: boolean;
+  amount?: number;
+  description?: string;
+  type?: "INCOME" | "EXPENSE";
+  category?: string;
+  accountId?: string;
+  accountName?: string;
+  needsAccount?: boolean;
+} | null> {
+  const accountList =
+    accounts.map((a) => `${a.name}(${a.type})`).join(", ") || "tidak ada";
+
+  const prompt = `Kamu parser transaksi keuangan. Analisis pesan user dan ekstrak detail transaksi dalam JSON.
+
+ATURAN PENTING:
+- "gaji masuk 4 jt ke bca" → {"isTransaction":true,"amount":4000000,"description":"Gaji","type":"INCOME","category":"Gaji","accountName":"BCA"}
+- "makan siang 25rb" → {"isTransaction":true,"amount":25000,"description":"Makan siang","type":"EXPENSE","category":"Makanan","needsAccount":true}
+- "transfer 100k ke budi" → {"isTransaction":true,"amount":100000,"description":"Transfer ke Budi","type":"EXPENSE","category":"Transfer"}
+- "bayar listrik 200rb pake bca" → {"isTransaction":true,"amount":200000,"description":"Bayar Listrik","type":"EXPENSE","category":"Tagihan","accountName":"BCA"}
+- "supriadi bayar hutang 50rb" → {"isTransaction":true,"amount":50000,"description":"Supriadi Bayar Hutang","type":"INCOME","category":"Lainnya"}
+- "terima gaji 5 juta bulan ini" → {"isTransaction":true,"amount":5000000,"description":"Gaji","type":"INCOME","category":"Gaji","needsAccount":true}
+
+KONVERSI AMOUNT:
+- 4 jt / 4 juta = 4000000
+- 50rb / 50 ribu = 50000
+- 100k = 100000
+- 2.5 jt = 2500000
+- "50000" tanpa suffix = 50000
+
+TYPE:
+- INCOME: gaji, terima, dapat, bonus, freelance, refund, hadiah, hutang dibayar, utang dibayar
+- EXPENSE: beli, bayar, makan, minum, transport, tagihan, transfer, jajan
+
+CATEGORY (pilih salah satu):
+- EXPENSE: Makanan, Minuman, Transportasi, Belanja, Hiburan, Tagihan, Kesehatan, Pendidikan, Pakaian, Rumah Tangga, Donasi, Langganan, Perjalanan, Transfer, Lainnya
+- INCOME: Gaji, Bonus, Freelance, Investasi, Hadiah, Refund, Lainnya
+
+ACCOUNT: jika user sebut nama akun (${accountList}), masukkan ke accountName.
+Jika transaksi tapi tidak sebut akun, set needsAccount: true.
+Jika BUKAN transaksi (query, sapaan, tanya saldo, dll): {"isTransaction":false}
+
+OUTPUT: HANYA JSON, tanpa markdown, tanpa \`\`\`, tanpa penjelasan.`;
+
+  try {
+    const response = await aiManager.chat(
+      [
+        { role: "system", content: prompt },
+        { role: "user", content: message },
+      ],
+      { temperature: 0, maxTokens: 256 },
+    );
+
+    const raw = response.content.trim();
+    // Bersihkan markdown code fence jika ada
+    const jsonStr = raw
+      .replace(/^```(?:json)?\s*\n?/i, "")
+      .replace(/\n?```\s*$/i, "")
+      .trim();
+
+    const parsed = JSON.parse(jsonStr);
+
+    // Validasi & normalisasi
+    if (!parsed || typeof parsed.isTransaction !== "boolean") return null;
+    if (!parsed.isTransaction) return { isTransaction: false };
+
+    // Cari accountId dari accountName
+    let accountId: string | undefined;
+    if (parsed.accountName) {
+      const matched = accounts.find(
+        (a) => a.name.toLowerCase() === parsed.accountName.toLowerCase(),
+      );
+      if (matched) accountId = matched.id;
+    }
+
+    return {
+      isTransaction: true,
+      amount:
+        typeof parsed.amount === "number" && parsed.amount > 0
+          ? parsed.amount
+          : undefined,
+      description: parsed.description || undefined,
+      type:
+        parsed.type === "INCOME" || parsed.type === "EXPENSE"
+          ? parsed.type
+          : undefined,
+      category: parsed.category || undefined,
+      accountId,
+      accountName: parsed.accountName || undefined,
+      needsAccount: parsed.needsAccount === true,
+    };
+  } catch (err) {
+    console.error("[AI] Transaction classifier error:", err);
+    return null;
+  }
 }
 
 // ─── Time range from natural language ──────────────────────
@@ -603,8 +884,9 @@ async function buildFinancialContext(
         accountRule =
           `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
           `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
-          `1. Cek apakah user menyebut nama akun dari daftar di atas (ABAIKAN CASE, contoh "bri" = "BRI").\n` +
-          `2. JIKA ADA NAMA AKUN: WAJIB keluarkan [ACTION:record_transaction] pakai ID akun tersebut.\n` +
+          `1. Cek apakah user menyebut nama akun dari daftar di atas (ABAIKAN CASE, contoh "bca" = "BCA").\n` +
+          `2. JIKA ADA NAMA AKUN (dalam pesan ini ATAU riwayat chat): WAJIB keluarkan [ACTION:record_transaction] pakai ID akun tersebut.\n` +
+          `   PENTING: Jika pesan user HANYA berisi nama akun (contoh: "BCA"), itu artinya user MEMILIH akun tersebut untuk transaksi sebelumnya. Langsung catat dengan [ACTION].\n` +
           `3. JIKA TIDAK ADA: JANGAN keluarkan [ACTION]. Tanya akun mana, akhiri dengan [ASK_ACCOUNT:${accOptions}]\n` +
           `4. Default EXPENSE, kecuali kata kunci pemasukan (gaji, bonus, refund, masuk).`;
       }
@@ -952,49 +1234,154 @@ aiRoutes.post("/chat", async (c) => {
     return c.json({ error: "Message is required" }, 400);
   }
 
+  // ─── Fetch accounts early (needed for classifier + all paths) ──
+  const accounts = await prisma.account.findMany({
+    where: { userId: user.userId },
+    select: { id: true, name: true, type: true, balance: true },
+  });
+
+  // ─── LLM Classifier: deteksi & ekstrak transaksi dari pesan ──
+  const txClass = await classifyTransactionMessage(message, accounts);
+
+  // ─── Path A: Complete transaction → save langsung, tanpa AI ──
+  if (
+    txClass?.isTransaction &&
+    txClass.amount &&
+    txClass.type &&
+    txClass.accountId
+  ) {
+    const matchedAccount = accounts.find((a) => a.id === txClass.accountId)!;
+    console.log(
+      `[AI] LLM classified complete tx: "${txClass.description}" Rp${txClass.amount} → ${matchedAccount.name}`,
+    );
+
+    return stream(c, async (s) => {
+      c.header("Content-Type", "text/event-stream");
+      c.header("Cache-Control", "no-cache");
+      c.header("Connection", "keep-alive");
+
+      try {
+        const catName = txClass.category || "Lainnya";
+        let categoryId: string | null = null;
+        const existingCat = await prisma.category.findFirst({
+          where: { userId: user.userId, name: catName },
+        });
+        if (existingCat) {
+          categoryId = existingCat.id;
+        } else {
+          const newCat = await prisma.category.create({
+            data: {
+              userId: user.userId,
+              name: catName,
+              type: txClass.type!,
+            },
+          });
+          categoryId = newCat.id;
+        }
+
+        const newTx = await prisma.$transaction(async (tx) => {
+          const created = await tx.transaction.create({
+            data: {
+              userId: user.userId,
+              type: txClass.type!,
+              amount: txClass.amount!,
+              description:
+                txClass.description ||
+                (txClass.type === "INCOME" ? "Pemasukan" : "Pengeluaran"),
+              categoryId,
+              accountId: matchedAccount.id,
+              source: "CHAT",
+              date: new Date(),
+            },
+          });
+
+          const delta =
+            txClass.type === "INCOME" ? txClass.amount! : -txClass.amount!;
+          await tx.account.update({
+            where: { id: matchedAccount.id },
+            data: { balance: { increment: delta } },
+          });
+
+          return created;
+        });
+
+        const formattedAmount = txClass.amount!.toLocaleString("id-ID");
+        const desc = txClass.description || "Transaksi";
+        const responseText = `✅ **${desc}** Rp${formattedAmount} dicatat dari **${matchedAccount.name}**.`;
+
+        await s.write(
+          `data: ${JSON.stringify({ type: "token", content: responseText })}\n\n`,
+        );
+        await s.write(
+          `data: ${JSON.stringify({
+            type: "transaction_created",
+            transaction: {
+              ...newTx,
+              category: catName,
+              account: matchedAccount.name,
+            },
+          })}\n\n`,
+        );
+
+        // Save chat history
+        try {
+          let convId = conversationId;
+          if (!convId) {
+            const title =
+              message.trim().slice(0, 60) + (message.length > 60 ? "…" : "");
+            const conv = await prisma.aiConversation.create({
+              data: { userId: user.userId, title, mode: "chat" },
+            });
+            convId = conv.id;
+          }
+          await prisma.aiMessage.create({
+            data: {
+              conversationId: convId,
+              userId: user.userId,
+              role: "user",
+              content: message.trim(),
+            },
+          });
+          await prisma.aiMessage.create({
+            data: {
+              conversationId: convId,
+              userId: user.userId,
+              role: "assistant",
+              content: responseText,
+            },
+          });
+        } catch (dbErr) {
+          console.error("[AI] Gagal menyimpan chat history:", dbErr);
+        }
+      } catch (err: any) {
+        await s.write(
+          `data: ${JSON.stringify({ type: "error", error: err.message || "Gagal menyimpan transaksi" })}\n\n`,
+        );
+      }
+
+      await s.write("data: [DONE]\n\n");
+    });
+  }
+
   // ─── Deteksi intent + bangun system prompt ──────────────
-  const { intent, timeRange } = analyzeIntent(message);
+  let { intent, timeRange } = analyzeIntent(message);
+
+  // Override intent jika LLM classifier mendeteksi transaksi (meski incomplete)
+  if (txClass?.isTransaction) {
+    intent = "transaksi";
+  }
+
   const wantsChart =
     /\b(grafik|chart|bagan|diagram|visualisasi|tampilkan|lihat)\b/i.test(
       message,
     );
-  const ctx = await buildFinancialContext(
-    user.userId,
-    intent,
-    timeRange,
-    false,
-    wantsChart,
-  );
-  const { systemPrompt, accounts, categories } = ctx;
-
-  const userMessage: ChatMessage = image
-    ? {
-        role: "user",
-        content: [
-          { type: "text", text: message },
-          { type: "image_url", image_url: { url: image } },
-        ],
-      }
-    : {
-        role: "user",
-        content: message,
-      };
-
-  const formattedHistory: ChatMessage[] = (history || []).map((h: any) => ({
-    role: h.type === "bot" ? "assistant" : "user",
-    content: h.text,
-  }));
-
-  const messages: ChatMessage[] = [
-    systemPrompt,
-    ...formattedHistory,
-    userMessage,
-  ];
 
   // ─── Simpan riwayat chat ke database ────────────────────────
-  const saveChatHistory = async (assistantContent: string) => {
+  const saveChatHistory = async (
+    assistantContent: string,
+    skipUserMessage = false,
+  ) => {
     try {
-      // Cari atau buat conversation
       let convId = conversationId;
       if (!convId) {
         const title =
@@ -1009,17 +1396,18 @@ aiRoutes.post("/chat", async (c) => {
         convId = conv.id;
       }
 
-      // Simpan user message
-      await prisma.aiMessage.create({
-        data: {
-          conversationId: convId,
-          userId: user.userId,
-          role: "user",
-          content: message.trim(),
-        },
-      });
+      // Simpan user message (kecuali follow-up akun seperti "BCA")
+      if (!skipUserMessage) {
+        await prisma.aiMessage.create({
+          data: {
+            conversationId: convId,
+            userId: user.userId,
+            role: "user",
+            content: message.trim(),
+          },
+        });
+      }
 
-      // Simpan assistant response (stripped of action blocks)
       if (assistantContent.trim()) {
         await prisma.aiMessage.create({
           data: {
@@ -1034,6 +1422,165 @@ aiRoutes.post("/chat", async (c) => {
       console.error("[AI] Gagal menyimpan chat history:", dbErr);
     }
   };
+
+  // ─── Format history ─────────────────────────────────────
+  const formattedHistory: ChatMessage[] = (history || []).map((h: any) => ({
+    role: h.type === "bot" ? "assistant" : "user",
+    content: h.text,
+  }));
+
+  // ─── Deteksi follow-up: user membalas dengan nama akun ──
+  if (intent === "lengkap" && message.length <= 30 && !/\d/.test(message)) {
+    const matchedAccount = accounts.find(
+      (a) =>
+        message.toLowerCase().includes(a.name.toLowerCase()) ||
+        a.name.toLowerCase().includes(message.toLowerCase().trim()),
+    );
+    if (matchedAccount) {
+      // Gunakan LLM classifier untuk cari transaksi pending di history
+      let parsed: {
+        amount: number;
+        description: string;
+        category: string;
+        type: "EXPENSE" | "INCOME";
+      } | null = null;
+
+      const lastUserMsg = [...formattedHistory]
+        .reverse()
+        .find((h) => h.role === "user");
+      if (lastUserMsg) {
+        const lastClass = await classifyTransactionMessage(
+          lastUserMsg.content as string,
+          accounts,
+        );
+        if (lastClass?.isTransaction && lastClass.amount && lastClass.type) {
+          parsed = {
+            amount: lastClass.amount,
+            description: lastClass.description || "Transaksi",
+            category: lastClass.category || "Lainnya",
+            type: lastClass.type,
+          };
+        }
+      }
+
+      // Fallback ke regex jika LLM gagal
+      if (!parsed) {
+        const lastTxMsg = [...formattedHistory]
+          .reverse()
+          .find(
+            (h) =>
+              h.role === "user" && isLikelyTransaction(h.content as string),
+          );
+        parsed = lastTxMsg
+          ? parseTransactionFromMessage(lastTxMsg.content as string)
+          : null;
+      }
+
+      if (parsed) {
+        console.log(
+          `[AI] Account follow-up "${message}" → saving directly: ${parsed.description} Rp${parsed.amount} → ${matchedAccount.name}`,
+        );
+
+        return stream(c, async (s) => {
+          c.header("Content-Type", "text/event-stream");
+          c.header("Cache-Control", "no-cache");
+          c.header("Connection", "keep-alive");
+
+          try {
+            // Cari/kreasi kategori di DB
+            let categoryId: string | null = null;
+            const existingCat = await prisma.category.findFirst({
+              where: { userId: user.userId, name: parsed.category },
+            });
+            if (existingCat) {
+              categoryId = existingCat.id;
+            } else {
+              const newCat = await prisma.category.create({
+                data: {
+                  userId: user.userId,
+                  name: parsed.category,
+                  type: parsed.type,
+                },
+              });
+              categoryId = newCat.id;
+            }
+
+            // Buat transaksi + update saldo
+            const newTx = await prisma.$transaction(async (tx) => {
+              const created = await tx.transaction.create({
+                data: {
+                  userId: user.userId,
+                  type: parsed.type,
+                  amount: parsed.amount,
+                  description: parsed.description,
+                  categoryId,
+                  accountId: matchedAccount.id,
+                  source: "CHAT",
+                  date: new Date(),
+                },
+              });
+
+              const delta =
+                parsed.type === "INCOME" ? parsed.amount : -parsed.amount;
+              await tx.account.update({
+                where: { id: matchedAccount.id },
+                data: { balance: { increment: delta } },
+              });
+
+              return created;
+            });
+
+            const formattedAmount = parsed.amount.toLocaleString("id-ID");
+            const responseText = `✅ **${parsed.description}** Rp${formattedAmount} dicatat dari **${matchedAccount.name}**.`;
+
+            await s.write(
+              `data: ${JSON.stringify({ type: "token", content: responseText })}\n\n`,
+            );
+            await s.write(
+              `data: ${JSON.stringify({ type: "transaction_created", transaction: { ...newTx, category: parsed.category, account: matchedAccount.name } })}\n\n`,
+            );
+
+            // Simpan only assistant response — skip user "BCA" message
+            await saveChatHistory(responseText, true);
+          } catch (err: any) {
+            await s.write(
+              `data: ${JSON.stringify({ type: "error", error: err.message || "Gagal menyimpan transaksi" })}\n\n`,
+            );
+          }
+
+          await s.write("data: [DONE]\n\n");
+        });
+      }
+    }
+  }
+
+  const ctx = await buildFinancialContext(
+    user.userId,
+    intent,
+    timeRange,
+    false,
+    wantsChart,
+  );
+  const { systemPrompt, categories } = ctx;
+
+  const userMessage: ChatMessage = image
+    ? {
+        role: "user",
+        content: [
+          { type: "text", text: message },
+          { type: "image_url", image_url: { url: image } },
+        ],
+      }
+    : {
+        role: "user",
+        content: message,
+      };
+
+  const messages: ChatMessage[] = [
+    systemPrompt,
+    ...formattedHistory,
+    userMessage,
+  ];
 
   // ─── SSE Streaming Response ─────────────────────────────────
   return stream(c, async (s) => {
@@ -1154,13 +1701,37 @@ aiRoutes.post("/chat/sync", async (c) => {
   }
 
   // ─── Deteksi intent + bangun system prompt ──────────────
-  const { intent, timeRange } = analyzeIntent(message);
+  let { intent, timeRange } = analyzeIntent(message);
   // draft mode selalu butuh full context (transaksi)
-  const finalIntent = draft ? "transaksi" : intent;
+  let finalIntent = draft ? "transaksi" : intent;
   const wantsChart =
     /\b(grafik|chart|bagan|diagram|visualisasi|tampilkan|lihat)\b/i.test(
       message,
     );
+
+  // ─── Deteksi follow-up: user membalas [ASK_ACCOUNT] dengan nama akun ──
+  if (
+    finalIntent === "lengkap" &&
+    message.length <= 30 &&
+    !/\d/.test(message)
+  ) {
+    const accounts = await prisma.account.findMany({
+      where: { userId: user.userId },
+      select: { id: true, name: true, type: true, balance: true },
+    });
+    const isAccountReply = accounts.some(
+      (a) =>
+        message.toLowerCase().includes(a.name.toLowerCase()) ||
+        a.name.toLowerCase().includes(message.toLowerCase().trim()),
+    );
+    if (isAccountReply) {
+      console.log(
+        `[AI] Detected account-selection follow-up: "${message}" → override intent to transaksi`,
+      );
+      finalIntent = "transaksi";
+    }
+  }
+
   const ctx = await buildFinancialContext(
     user.userId,
     finalIntent,

@@ -78,74 +78,424 @@ const DEFAULT_INCOME_CATS = [
 interface FinancialContext {
   systemPrompt: ChatMessage;
   accounts: { id: string; name: string; type: string; balance: number }[];
-  categories: { name: string; type: string }[];
+  categories: { id: string; name: string; type: string }[];
 }
 
 function isLikelyTransaction(message: string): boolean {
   if (!message) return false;
   const text = message.toLowerCase();
-  const hasNumber = /\d+/.test(text);
-  const txKeywords = [
+  const hasAmount = /\b\d[\d.,]*[kK]?\b/.test(text); // 50000, 50k, 50.000, 50rb
+
+  // Kata kerja aksi: HARUS ada untuk dianggap transaksi baru
+  const actionVerbs = [
     "beli",
     "bayar",
-    "masuk",
-    "keluar",
     "jajan",
     "ongkos",
     "parkir",
     "topup",
-    "transfer",
+    "transfer ke",
+    "kirim",
     "catat",
+    "ngeluarin",
+    "ngabisin",
+    "habis",
+    "keluar buat",
+    "pakai buat",
+    // income
+    "terima",
+    "dapat",
+    "dapet",
+    "dibayar",
+    "masuk dari",
+  ];
+
+  // Kata kunci query (BUKAN transaksi baru) — eksklusi eksplisit
+  const queryKeywords = [
+    "berapa",
+    "total",
     "pengeluaran",
     "pemasukan",
-    "gaji",
-    "bonus",
+    "riwayat",
+    "ringkasan",
+    "laporan",
+    "summary",
+    "minggu",
+    "bulan",
+    "hari",
+    "kemarin",
+    "terakhir",
+    "lalu",
+    "grafik",
+    "chart",
   ];
-  const hasTxKeyword = txKeywords.some((kw) => text.includes(kw));
-  return hasNumber || hasTxKeyword;
+
+  const hasActionVerb = actionVerbs.some((kw) => text.includes(kw));
+  const isQuery = queryKeywords.some((kw) => text.includes(kw));
+
+  // Transaksi baru = ada amount + ada kata kerja aksi + BUKAN query
+  return hasAmount && hasActionVerb && !isQuery;
+}
+
+// ─── Time range from natural language ──────────────────────
+interface TimeRange {
+  start: Date;
+  end: Date;
+  label: string; // e.g., "hari ini", "3 hari terakhir", "bulan lalu"
+}
+
+function parseTemporal(message: string): TimeRange | null {
+  const text = message.toLowerCase().trim();
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  // "N hari ini" (colloquial: "2 hari ini" = last 2 days)
+  // Cek DULU sebelum "hari ini" supaya "2 hari ini" tidak ditangkap sebagai hari ini
+  const daysIniMatch = text.match(/(\d+)\s*hari ini\b/);
+  if (daysIniMatch) {
+    const days = parseInt(daysIniMatch[1], 10);
+    if (days > 0 && days <= 365) {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - days + 1);
+      return { start, end: now, label: `${days} hari terakhir` };
+    }
+  }
+
+  // "hari ini" / "today"
+  if (/\bhari ini\b|today/i.test(text)) {
+    return { start: startOfDay, end: now, label: "hari ini" };
+  }
+
+  // "kemarin" / "yesterday"
+  if (/\bkemarin\b|yesterday/i.test(text)) {
+    const y = new Date(startOfDay);
+    y.setDate(y.getDate() - 1);
+    const yEnd = new Date(y);
+    yEnd.setDate(yEnd.getDate() + 1);
+    return { start: y, end: yEnd, label: "kemarin" };
+  }
+
+  // "N hari terakhir" / "N hari belakangan"
+  const daysMatch = text.match(/(\d+)\s*hari\s*(terakhir|belakangan)/);
+  if (daysMatch) {
+    const days = parseInt(daysMatch[1], 10);
+    if (days > 0 && days <= 365) {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - days + 1);
+      return { start, end: now, label: `${days} hari terakhir` };
+    }
+  }
+
+  // "tadi" / "barusan" / "sekarang" → implicitly today
+  if (/\btadi\b|\bbarusan\b|\bsekarang\b/i.test(text)) {
+    return { start: startOfDay, end: now, label: "hari ini" };
+  }
+
+  // "minggu lalu" / "last week"
+  if (/\bminggu lalu\b|last week/i.test(text)) {
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const thisMonday = new Date(startOfDay);
+    thisMonday.setDate(thisMonday.getDate() - mondayOffset);
+    const lastMonday = new Date(thisMonday);
+    lastMonday.setDate(lastMonday.getDate() - 7);
+    return { start: lastMonday, end: thisMonday, label: "minggu lalu" };
+  }
+
+  // "minggu ini" / "pekan ini" / "this week"
+  if (/\bminggu ini\b|\bpekan ini\b|this week/i.test(text)) {
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const monday = new Date(startOfDay);
+    monday.setDate(monday.getDate() - mondayOffset);
+    return { start: monday, end: now, label: "minggu ini" };
+  }
+
+  // "N minggu terakhir"
+  const weeksMatch = text.match(/(\d+)\s*minggu\s*(terakhir|belakangan)/);
+  if (weeksMatch) {
+    const weeks = parseInt(weeksMatch[1], 10);
+    if (weeks > 0 && weeks <= 52) {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - weeks * 7);
+      return { start, end: now, label: `${weeks} minggu terakhir` };
+    }
+  }
+
+  // "bulan lalu" / "last month"
+  if (/\bbulan lalu\b|last month/i.test(text)) {
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return { start: lastMonthStart, end: thisMonthStart, label: "bulan lalu" };
+  }
+
+  // "bulan ini" / "this month"
+  if (/\bbulan ini\b|this month/i.test(text)) {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { start, end: now, label: "bulan ini" };
+  }
+
+  // "N bulan terakhir"
+  const monthsMatch = text.match(/(\d+)\s*bulan\s*(terakhir|belakangan)/);
+  if (monthsMatch) {
+    const months = parseInt(monthsMatch[1], 10);
+    if (months > 0 && months <= 60) {
+      const start = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+      return { start, end: now, label: `${months} bulan terakhir` };
+    }
+  }
+
+  // "tahun ini" / "this year"
+  if (/\btahun ini\b|this year/i.test(text)) {
+    const start = new Date(now.getFullYear(), 0, 1);
+    return { start, end: now, label: "tahun ini" };
+  }
+
+  // "tahun lalu" / "last year"
+  if (/\btahun lalu\b|last year/i.test(text)) {
+    const start = new Date(now.getFullYear() - 1, 0, 1);
+    const end = new Date(now.getFullYear(), 0, 1);
+    return { start, end, label: "tahun lalu" };
+  }
+
+  // "mingguan" / "weekly" → this week
+  if (/\bmingguan\b|weekly/i.test(text)) {
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const monday = new Date(startOfDay);
+    monday.setDate(monday.getDate() - mondayOffset);
+    return { start: monday, end: now, label: "minggu ini" };
+  }
+
+  // "bulanan" / "monthly" → this month
+  if (/\bbulanan\b|monthly/i.test(text)) {
+    return {
+      start: new Date(now.getFullYear(), now.getMonth(), 1),
+      end: now,
+      label: "bulan ini",
+    };
+  }
+
+  return null;
+}
+
+// ─── Intent detection: klasifikasi pertanyaan user ────────────
+type ChatIntent =
+  | "non_finansial"
+  | "saldo"
+  | "pengeluaran"
+  | "pemasukan"
+  | "transaksi"
+  | "lengkap";
+
+function analyzeIntent(message: string): {
+  intent: ChatIntent;
+  timeRange: TimeRange | null;
+} {
+  const text = message.toLowerCase().trim();
+
+  // ── Non-finansial: cek PERTAMA (paling cepat) ───────────────
+  if (/^(hai|halo|hi|hey|test|ping)\b/i.test(text)) {
+    return { intent: "non_finansial", timeRange: null };
+  }
+  if (
+    /^(siapa kamu|kamu siapa|help|bantuan|apa yang bisa|bisa apa)\b/i.test(text)
+  ) {
+    return { intent: "non_finansial", timeRange: null };
+  }
+  if (/^(apa kabar|selamat (pagi|siang|sore|malam))\b/i.test(text)) {
+    return { intent: "non_finansial", timeRange: null };
+  }
+
+  // ── Parse temporal DULU sebelum intent lain ─────────────────
+  // Supaya "beli kopi 15k tadi" tidak salah ambil timeRange
+  const timeRange = parseTemporal(message);
+
+  // ── Saldo: tidak ada query pengeluaran/pemasukan ────────────
+  const hasFinanceQuery =
+    /\b(pengeluaran|expense|pemasukan|income|transaksi|belanja|boros|hemat|keluar|habis)\b/i.test(
+      text,
+    );
+
+  if (
+    /\b(saldo|rekening|balance|tabungan|dompet)\b/i.test(text) &&
+    !hasFinanceQuery
+  ) {
+    return { intent: "saldo", timeRange: null }; // saldo tidak pakai timeRange
+  }
+
+  // ── "Berapa uang saya" → saldo juga ─────────────────────────
+  if (/\bberapa (uang|duit)\b/i.test(text) && !hasFinanceQuery) {
+    return { intent: "saldo", timeRange: null };
+  }
+
+  // ── Transaksi BARU: cek setelah saldo ───────────────────────
+  if (isLikelyTransaction(message)) {
+    return { intent: "transaksi", timeRange: null }; // transaksi baru tidak pakai timeRange
+  }
+
+  // ── Pemasukan (eksplisit, tidak campur pengeluaran) ─────────
+  if (
+    /\b(pemasukan|income|gaji|bonus|terima gaji)\b/i.test(text) &&
+    !/\b(pengeluaran|keluar|expense)\b/i.test(text)
+  ) {
+    return { intent: "pemasukan", timeRange };
+  }
+
+  // ── Pengeluaran atau query keuangan umum ─────────────────────
+  if (
+    /\b(pengeluaran|expense|keluar|belanja|boros|hemat|budget|habis berapa|abis berapa)\b/i.test(
+      text,
+    )
+  ) {
+    return { intent: "pengeluaran", timeRange };
+  }
+
+  // ── Ada time reference tapi intent tidak jelas → pengeluaran ─
+  if (timeRange) {
+    return { intent: "pengeluaran", timeRange };
+  }
+
+  // ── Fallback ────────────────────────────────────────────────
+  return { intent: "lengkap", timeRange: null };
 }
 
 async function buildFinancialContext(
   userId: string,
-  includeFullContext: boolean = true,
+  intent: ChatIntent,
+  timeRange: TimeRange | null,
   draftMode: boolean = false,
+  wantsChart: boolean = false,
 ): Promise<FinancialContext> {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [accounts, categories, todayTx, todayAgg, monthAgg] = await Promise.all(
-    [
-      prisma.account.findMany({
-        where: { userId },
-        select: { id: true, name: true, type: true, balance: true },
-      }),
-      prisma.category.findMany({
-        where: { userId },
-        select: { name: true, type: true },
-        orderBy: { name: "asc" },
-      }),
-      prisma.transaction.findMany({
-        where: { userId, date: { gte: startOfDay } },
-        select: { id: true, type: true, amount: true, description: true },
-        orderBy: { date: "desc" },
-        take: 10,
-      }),
-      prisma.transaction.aggregate({
-        where: { userId, date: { gte: startOfDay }, type: "EXPENSE" },
-        _sum: { amount: true },
-        _count: true,
-      }),
-      prisma.transaction.aggregate({
-        where: { userId, date: { gte: startOfMonth }, type: "EXPENSE" },
-        _sum: { amount: true },
-      }),
-    ],
+  // ─── Tentukan rentang efektif ────────────────────────────
+  const range: TimeRange = timeRange || {
+    start: intent === "transaksi" ? startOfDay : startOfMonth,
+    end: now,
+    label: intent === "transaksi" ? "hari ini" : "bulan ini",
+  };
+
+  // ─── Tentukan data yang dibutuhkan ──────────────────────
+  const needFullContext = intent === "transaksi";
+  const needExpense =
+    intent === "pengeluaran" || intent === "transaksi" || intent === "lengkap";
+  const needIncome =
+    intent === "pemasukan" || intent === "transaksi" || intent === "lengkap"; // FIX: lengkap butuh income juga
+  const needCategories = needExpense || needFullContext;
+
+  // FIX: recentTx hanya untuk transaksi baru (referensi delete/edit),
+  // BUKAN untuk intent "lengkap" yang cuma query ringkasan
+  const needRecentTx = needFullContext;
+
+  // category breakdown: untuk query historis saja, bukan transaksi baru
+  const needCatBreakdown = needExpense && !needFullContext;
+
+  // ─── Bangun query plan ───────────────────────────────────────
+  const queries: Promise<any>[] = [];
+  const keys: string[] = [];
+
+  // Akun: selalu
+  keys.push("accounts");
+  queries.push(
+    prisma.account.findMany({
+      where: { userId },
+      select: { id: true, name: true, type: true, balance: true },
+    }),
   );
+
+  // Kategori: hanya saat dibutuhkan
+  keys.push("categories");
+  queries.push(
+    needCategories
+      ? prisma.category.findMany({
+          where: { userId },
+          select: { id: true, name: true, type: true },
+          orderBy: { name: "asc" },
+        })
+      : Promise.resolve([]),
+  );
+
+  // Aggregate pengeluaran
+  keys.push("expAgg");
+  queries.push(
+    needExpense
+      ? prisma.transaction.aggregate({
+          where: {
+            userId,
+            date: { gte: range.start, lte: range.end },
+            type: "EXPENSE",
+          },
+          _sum: { amount: true },
+          _count: true,
+        })
+      : Promise.resolve({ _sum: { amount: null }, _count: 0 }),
+  );
+
+  // Aggregate pemasukan
+  keys.push("incAgg");
+  queries.push(
+    needIncome
+      ? prisma.transaction.aggregate({
+          where: {
+            userId,
+            date: { gte: range.start, lte: range.end },
+            type: "INCOME",
+          },
+          _sum: { amount: true },
+          _count: true, // FIX: tambah _count supaya bisa sebut "N pemasukan"
+        })
+      : Promise.resolve({ _sum: { amount: null }, _count: 0 }),
+  );
+
+  // Category breakdown: hanya untuk query historis
+  keys.push("expByCat");
+  queries.push(
+    needCatBreakdown
+      ? prisma.transaction.groupBy({
+          by: ["categoryId"],
+          where: {
+            userId,
+            date: { gte: range.start, lte: range.end },
+            type: "EXPENSE",
+          },
+          _sum: { amount: true },
+          orderBy: { _sum: { amount: "desc" } },
+          take: 8,
+        })
+      : Promise.resolve([]),
+  );
+
+  // Recent tx: hanya untuk transaksi baru (referensi delete/edit)
+  keys.push("recentTx");
+  queries.push(
+    needRecentTx
+      ? prisma.transaction.findMany({
+          where: { userId, date: { gte: range.start, lte: range.end } },
+          select: { id: true, type: true, amount: true, description: true },
+          orderBy: { date: "desc" },
+          take: 10,
+        })
+      : Promise.resolve([]),
+  );
+
+  const results = await Promise.all(queries);
+  const d: Record<string, any> = {};
+  keys.forEach((k, i) => (d[k] = results[i]));
+
+  const accounts: {
+    id: string;
+    name: string;
+    type: string;
+    balance: number;
+  }[] = d.accounts;
+  const categories: { id: string; name: string; type: string }[] = d.categories;
 
   const totalBalance = accounts.reduce((s, a) => s + a.balance, 0);
 
-  // ─── Data akun (internal dengan ID) ─────────────────────
+  // ─── Data akun ──────────────────────────────────────────
   const accountListInternal = accounts.length
     ? accounts
         .map(
@@ -154,100 +504,124 @@ async function buildFinancialContext(
         )
         .join("|")
     : "nol";
-
-  // ─── Data akun (clean tanpa ID, untuk user) ─────────────
   const accountListClean = accounts.length
     ? accounts
         .map((a) => `${a.name}(${a.type}):${a.balance.toLocaleString("id-ID")}`)
         .join("|")
     : "nol";
 
-  // ─── Ringkasan transaksi hari ini ───────────────────────
-  const todayExpense = todayAgg._sum?.amount || 0;
-  const todayCount = todayAgg._count || 0;
-  const todayInAgg = await prisma.transaction.aggregate({
-    where: { userId, date: { gte: startOfDay }, type: "INCOME" },
-    _sum: { amount: true },
-  });
-  const todayIncome = todayInAgg._sum?.amount || 0;
+  // ─── Resolve category names ─────────────────────────────
+  const catNameById = new Map<string, string>();
+  for (const c of categories) catNameById.set(c.id, c.name);
 
-  let todaySummary = `Hari ini: ${todayCount} tx`;
-  if (todayExpense > 0)
-    todaySummary += ` | keluar Rp${todayExpense.toLocaleString("id-ID")}`;
-  if (todayIncome > 0)
-    todaySummary += ` | masuk Rp${todayIncome.toLocaleString("id-ID")}`;
-  if (todayTx.length > 0) {
-    const recentItems = todayTx
-      .slice(0, 5)
+  function fmtCatBreakdown(
+    groups: { categoryId: string | null; _sum: { amount: number | null } }[],
+  ): string {
+    return groups
+      .filter((g) => g._sum.amount && g._sum.amount > 0)
+      .map((g) => {
+        const name = g.categoryId
+          ? catNameById.get(g.categoryId) || g.categoryId
+          : "Lainnya";
+        return `${name}:Rp${g._sum.amount!.toLocaleString("id-ID")}`;
+      })
+      .join("|");
+  }
+
+  // ─── Bangun data section (single range) ─────────────────
+  const expenseTotal = d.expAgg._sum?.amount || 0;
+  const expenseCount = d.expAgg._count || 0;
+  const incomeTotal = d.incAgg._sum?.amount || 0;
+  const incomeCount = d.incAgg._count || 0; // FIX: sekarang ada _count
+  const recentTx = d.recentTx as any[];
+
+  const dataParts: string[] = [];
+  if (intent !== "non_finansial") {
+    dataParts.push(`Total Saldo: Rp${totalBalance.toLocaleString("id-ID")}`);
+    dataParts.push(`Akun: [${accountListClean}]`);
+  }
+  dataParts.push(`Periode: ${range.label}`);
+
+  if (needExpense && (expenseTotal > 0 || expenseCount > 0)) {
+    let expStr = `Pengeluaran: ${expenseCount} tx | total Rp${expenseTotal.toLocaleString("id-ID")}`;
+    const catStr = fmtCatBreakdown(d.expByCat);
+    if (catStr) expStr += ` | per-kategori: ${catStr}`;
+    dataParts.push(expStr);
+  }
+
+  if (needIncome && incomeTotal > 0) {
+    dataParts.push(
+      `Pemasukan: ${incomeCount} tx | total Rp${incomeTotal.toLocaleString("id-ID")}`,
+    );
+  }
+
+  if (needRecentTx && recentTx.length > 0) {
+    const txItems = recentTx
+      .slice(0, 8)
       .map(
         (t: any) =>
           `[${t.id}]${t.type === "EXPENSE" ? "-" : "+"}${t.description}:${t.amount}`,
       )
       .join("|");
-    todaySummary += " | transaksi: " + recentItems;
+    dataParts.push(`Transaksi hari ini: ${txItems}`);
   }
 
-  // ─── Ringkasan bulan ini ────────────────────────────────
-  const monthExpense = monthAgg._sum?.amount || 0;
-  const monthSummary =
-    monthExpense > 0
-      ? `Bulan ini keluar: Rp${monthExpense.toLocaleString("id-ID")}`
-      : "";
+  const dataSection =
+    dataParts.length > 0 ? "DATA:\n" + dataParts.join(" | ") : "";
 
-  // ─── Aturan akun ────────────────────────────────────────
-  let accountRule: string;
-  if (accounts.length === 0) {
-    accountRule =
-      "⚠️ Belum ada akun. JANGAN catat transaksi. Suruh user tambah akun dulu.";
-  } else if (accounts.length === 1) {
-    accountRule =
-      "✅ 1 akun: " +
-      accounts[0].name +
-      '. Auto-pakai accountId="' +
-      accounts[0].id +
-      '" untuk semua transaksi.';
-  } else {
-    const accOptions = accounts.map((a) => a.name).join(",");
-    if (draftMode) {
-      accountRule =
-        `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
-        `ATURAN DRAFT:\n` +
-        `1. WAJIB SELALU keluarkan blok [ACTION:draft_transaction] di akhir pesan apapun yang terjadi.\n` +
-        `2. Cek apakah di struk ada petunjuk dompet/akun dari daftar (abaikan huruf besar/kecil). Jika ada, otomatis isi accountId-nya.\n` +
-        `3. JIKA di struk TIDAK ADA petunjuk dompet/akun sama sekali, kosongkan accountId ("") DAN tambahkan baris ini di akhir pesan: [ASK_ACCOUNT:${accOptions}]`;
-    } else {
-      accountRule =
-        `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
-        `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
-        `1. Cek apakah tulisan user menyebutkan nama akun dari daftar di atas (ABAIKAN HURUF BESAR/KECIL, contoh "bri" berarti "BRI").\n` +
-        `2. JIKA ADA NAMA AKUN: WAJIB keluarkan blok [ACTION:record_transaction] menggunakan ID akun tersebut. JANGAN tanya lagi!\n` +
-        `3. JIKA SAMA SEKALI TIDAK ADA NAMA AKUN: JANGAN keluarkan blok [ACTION]. Tanya ke user akun mana yang mau dipakai, lalu akhiri pesan tepat dengan: [ASK_ACCOUNT:${accOptions}]\n` +
-        `4. Asumsikan default transaksi adalah PENGELUARAN (EXPENSE), kecuali kata-katanya jelas menyatakan pemasukan (gaji, bonus, refund, masuk).`;
-    }
-  }
-
-  // ─── Bangun prompt KOMPAK (hemat token) ─────────────────
-  const expCatStr = DEFAULT_EXPENSE_CATS.join(",");
-  const incCatStr = DEFAULT_INCOME_CATS.join(",");
+  // ─── Internal section (hanya saat butuh ACTION) ─────────
   const userCatStr = categories.length
     ? categories.map((c) => `${c.name}(${c.type})`).join(",")
     : "nol";
-
-  const dataSection =
-    `DATA:\nTotal Saldo: Rp${totalBalance.toLocaleString("id-ID")} | Rincian Akun: [${accountListClean}] | ${todaySummary}` +
-    (monthSummary ? ` | ${monthSummary}` : "");
-
-  const internalSection = includeFullContext
+  const internalSection = needFullContext
     ? `\nRAHASIA - hanya untuk isian accountId di [ACTION], JANGAN disalin ke respons:\n[${accountListInternal}]\nKategori:[${userCatStr}]`
     : "";
 
+  // ─── Account rule (hanya saat ACTION mode) ──────────────
+  let accountRule = "";
+  if (needFullContext) {
+    if (accounts.length === 0) {
+      accountRule =
+        "⚠️ Belum ada akun. JANGAN catat transaksi. Suruh user tambah akun dulu.";
+    } else if (accounts.length === 1) {
+      accountRule =
+        "✅ 1 akun: " +
+        accounts[0].name +
+        '. Auto-pakai accountId="' +
+        accounts[0].id +
+        '" untuk semua transaksi.';
+    } else {
+      const accOptions = accounts.map((a) => a.name).join(",");
+      if (draftMode) {
+        accountRule =
+          `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
+          `ATURAN DRAFT:\n` +
+          `1. WAJIB SELALU keluarkan blok [ACTION:draft_transaction] di akhir pesan.\n` +
+          `2. Cek apakah di struk ada petunjuk dompet/akun dari daftar (abaikan huruf besar/kecil). Jika ada, otomatis isi accountId-nya.\n` +
+          `3. JIKA di struk TIDAK ADA petunjuk dompet/akun sama sekali, kosongkan accountId ("") DAN tambahkan: [ASK_ACCOUNT:${accOptions}]`;
+      } else {
+        accountRule =
+          `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
+          `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
+          `1. Cek apakah user menyebut nama akun dari daftar di atas (ABAIKAN CASE, contoh "bri" = "BRI").\n` +
+          `2. JIKA ADA NAMA AKUN: WAJIB keluarkan [ACTION:record_transaction] pakai ID akun tersebut.\n` +
+          `3. JIKA TIDAK ADA: JANGAN keluarkan [ACTION]. Tanya akun mana, akhiri dengan [ASK_ACCOUNT:${accOptions}]\n` +
+          `4. Default EXPENSE, kecuali kata kunci pemasukan (gaji, bonus, refund, masuk).`;
+      }
+    }
+  }
+
+  // ─── Action format (hanya saat transaksi) ───────────────
+  const expCatStr = DEFAULT_EXPENSE_CATS.join(",");
+  const incCatStr = DEFAULT_INCOME_CATS.join(",");
   let actionFormat = "";
-  if (includeFullContext) {
+
+  if (needFullContext) {
     actionFormat = "FORMAT AKSI:\n";
     if (draftMode) {
       actionFormat +=
         '1. Draft Transaksi (WAJIB ADA): [ACTION:draft_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan Siang Nasi Padang","category":"Makanan","accountId":"<id_atau_kosong>"}[/ACTION]\n' +
-        "- Tentukan mandiri (biasanya pengeluaran). Jika struk ada info bank, otomatis pilih accountId.\n";
+        "- Tentukan mandiri. Jika struk ada info bank, otomatis pilih accountId.\n";
     } else {
       actionFormat +=
         '1. Mencatat: [ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan Siang Nasi Padang","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
@@ -255,41 +629,137 @@ async function buildFinancialContext(
         '3. Mengubah: [ACTION:update_transaction]{"id":"<id>","amount":60000,"description":"Makan Malam di Restoran"}[/ACTION]\n';
     }
     actionFormat +=
-      "4. Grafik: Jika ditanya ringkasan pengeluaran bulanan/mingguan, HANYA keluarkan: [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK]\n" +
-      "- type: INCOME|EXPENSE | amount: angka | description: HARUS deskriptif lengkap dengan awalan konteks, contoh: 'Pembelian Thai Tea Kenangan', 'Pembayaran Domain obs.my.id', 'Makan Siang di Warteg', 'Bayar Parkir Mall', 'Top up GoPay 50rb', 'Transfer ke Ibu'. JANGAN pakai deskripsi terlalu pendek seperti hanya 'Thai Tea'.\n" +
-      `- category: HARUS spesifik. Acuan EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
-      "- accountId: WAJIB dari daftar RAHASIA. JANGAN bocorkan!\n\n";
-
-    actionFormat += `${accountRule}\n\n`;
+      "4. Grafik: Jika user tanya pengeluaran bulanan/mingguan, SELALU sertakan [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK] di akhir.\n" +
+      "- type: INCOME|EXPENSE | amount: angka | description: HARUS deskriptif lengkap.\n" +
+      `- category: HARUS spesifik. EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
+      "- accountId: WAJIB dari daftar RAHASIA. JANGAN bocorkan!\n\n" +
+      `${accountRule}\n\n`;
   }
 
-  const systemContent =
-    "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Diluar itu tolak sopan.\n\n" +
-    actionFormat +
-    "Aturan respons:\n" +
-    (draftMode
-      ? ""
-      : "- Jangan keluarkan [ACTION] jika amount atau description belum lengkap. Tanya dulu.\n") +
-    "- Jika semua data lengkap, beri pesan sukses + [ACTION] di akhir.\n" +
-    "- Nada: ramah, hangat, seperti teman bantu catat keuangan. Jangan kaku seperti robot.\n" +
-    "- Jika ditanya saldo akun spesifik: jawab HANYA akun itu. Jangan sebut total atau akun lain.\n" +
-    "- Jika ditanya saldo umum (tanpa nama akun): sebut Total Saldo, rinci per akun.\n" +
-    "- RAHASIA: jangan tampilkan [cmq...] atau ID akun ke user.\n" +
-    "- JANGAN sertakan timestamp/jam/angka acak di awal respons. Mulai langsung jawab.\n" +
-    "- Gunakan Markdown: **tebal** untuk angka, - list untuk rincian, ### untuk heading.\n" +
-    "- Contoh tanya spesifik:\n" +
-    "  User: saldo BCA?\n" +
-    "  AI: Halo! Saldo BCA kamu **Rp3.000.000** ya.\n" +
-    "- Contoh tanya umum:\n" +
-    "  User: saldo saya?\n" +
-    "  AI: ### Saldo Kamu\n  **Total: Rp3.000.000**\n  - BCA: Rp3.000.000\n  - BRI: Rp0\n\n  Masih aman kok! \ud83d\ude0a\n" +
-    "- Contoh sukses transaksi:\n" +
-    "  **Rp50.000** - Makan Siang - BCA - Makanan\n\n" +
-    dataSection +
-    internalSection;
+  // ─── Chart tag berdasarkan rentang ──────────────────────
+  const rangeDays = Math.ceil(
+    (range.end.getTime() - range.start.getTime()) / (1000 * 60 * 60 * 24),
+  );
+  const chartTag =
+    rangeDays <= 10
+      ? "[SHOW_CHART:EXPENSE_WEEK]"
+      : "[SHOW_CHART:EXPENSE_MONTH]";
+
+  // ─── Bangun system prompt per intent ─────────────────────
+  let systemContent = "";
+
+  switch (intent) {
+    case "non_finansial":
+      systemContent =
+        "Kamu: Catatin AI, asisten keuangan pribadi. Jawab singkat, tolak sopan jika di luar topik keuangan.\n" +
+        "Tawarkan bantuan: catat transaksi, cek saldo, lihat pengeluaran mingguan/bulanan.";
+      break;
+
+    case "saldo":
+      systemContent =
+        "Kamu: Catatin AI, asisten keuangan pribadi.\n\n" +
+        "FORMAT:\n" +
+        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
+        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
+        "- JANGAN pakai list bertingkat (sub-bullet di dalam bullet).\n" +
+        "- Paragraf maksimal 3 kalimat.\n\n" +
+        "Aturan:\n" +
+        "- Jawab pertanyaan saldo HANYA dari DATA di bawah.\n" +
+        "- Jika user tanya akun spesifik: jawab HANYA akun itu.\n" +
+        "- Jika user tanya saldo umum: sebut Total Saldo, rinci per akun.\n" +
+        "- Nada: ramah, hangat, seperti teman. SESUAIKAN dengan kondisi:\n" +
+        "  * Saldo sehat → santai, optimis.\n" +
+        "  * Saldo menipis → ingatkan hemat dengan sopan.\n\n" +
+        dataSection;
+      break;
+
+    case "pengeluaran":
+      systemContent =
+        "Kamu: Catatin AI, asisten keuangan pribadi.\n\n" +
+        "FORMAT:\n" +
+        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
+        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
+        "- JANGAN pakai list bertingkat (sub-bullet di dalam bullet).\n" +
+        "- Paragraf maksimal 3 kalimat.\n\n" +
+        `Aturan (periode: ${range.label}):\n` +
+        "- Jawab pertanyaan pengeluaran HANYA dari DATA di bawah.\n" +
+        "- Sebutkan total pengeluaran + breakdown per-kategori dengan - list.\n" +
+        (wantsChart
+          ? `- User minta grafik: akhiri dengan ${chartTag}.\n`
+          : "") +
+        "- Nada: ramah, SESUAIKAN dengan kondisi DATA:\n" +
+        "  * Pengeluaran wajar → santai.\n" +
+        "  * Pengeluaran > pemasukan → ingatkan dengan sopan, beri tips hemat.\n" +
+        "  * JANGAN bilang 'Masih aman' kalau defisit.\n\n" +
+        dataSection;
+      break;
+
+    case "pemasukan":
+      systemContent =
+        "Kamu: Catatin AI, asisten keuangan pribadi.\n\n" +
+        "FORMAT:\n" +
+        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
+        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
+        "- JANGAN pakai list bertingkat. Paragraf maksimal 3 kalimat.\n\n" +
+        `Aturan (periode: ${range.label}):\n` +
+        "- Jawab pertanyaan pemasukan HANYA dari DATA di bawah.\n" +
+        "- Sebutkan total pemasukan.\n" +
+        "- Nada: ramah, hangat.\n\n" +
+        dataSection;
+      break;
+
+    case "transaksi":
+      systemContent =
+        "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Diluar itu tolak sopan.\n\n" +
+        "FORMAT:\n" +
+        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
+        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
+        "- JANGAN pakai list bertingkat. Paragraf maksimal 3 kalimat.\n\n" +
+        actionFormat +
+        "Aturan menjawab pertanyaan keuangan (penting!):\n" +
+        "- Jika user tanya pengeluaran: sebut total + per-kategori dari DATA + " +
+        chartTag +
+        ".\n" +
+        "- Jika user tanya nominal spesifik: WAJIB jawab dari DATA. JANGAN cuma 'lihat grafik'.\n" +
+        (draftMode
+          ? ""
+          : "- Jangan keluarkan [ACTION] jika amount/description belum lengkap.\n") +
+        "- Nada: ramah, hangat. SESUAIKAN kondisi DATA:\n" +
+        "  * Saldo tinggi & pengeluaran wajar → optimis.\n" +
+        "  * Saldo menipis / pengeluaran >50% → ingatkan hemat, beri tips.\n" +
+        "  * JANGAN bilang 'Masih aman'/'Lumayan' jika kondisi buruk.\n\n" +
+        dataSection +
+        internalSection;
+      break;
+
+    case "lengkap":
+    default:
+      systemContent =
+        "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, tabungan. Diluar itu tolak sopan.\n\n" +
+        "FORMAT:\n" +
+        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
+        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
+        "- JANGAN pakai list bertingkat. Paragraf maksimal 3 kalimat.\n" +
+        "- Struktur: ringkasan → detail → saran (jika diminta).\n\n" +
+        `Aturan (periode: ${range.label}):\n` +
+        "- Jawab pertanyaan keuangan HANYA dari DATA di bawah.\n" +
+        "- Sebutkan total pemasukan + pengeluaran + saldo.\n" +
+        "- Breakdown per-kategori pengeluaran dengan - list (cukup sebut nama + nominal).\n" +
+        "- Jika user minta saran/masukan: gunakan list bernomor (1. 2. 3.) pendek, satu baris per poin.\n" +
+        "- JANGAN beri saran kalau user tidak minta.\n" +
+        "- Jika user tanya grafik: sertakan " +
+        chartTag +
+        " di akhir.\n" +
+        "- Nada: ramah, SESUAIKAN kondisi DATA:\n" +
+        "  * Saldo tinggi & pengeluaran wajar → optimis.\n" +
+        "  * Saldo menipis / pengeluaran >50% → ingatkan hemat, beri tips.\n" +
+        "  * JANGAN bilang 'Masih aman'/'Lumayan' jika kondisi buruk.\n\n" +
+        dataSection;
+      break;
+  }
 
   console.log(
-    `[AI] System prompt: ${systemContent.length} chars, ${systemContent.split(/\s+/).length} words`,
+    `[AI] intent=${intent} range=${range.label} rangeDays=${rangeDays} | prompt=${systemContent.length} chars`,
   );
 
   return {
@@ -482,8 +952,19 @@ aiRoutes.post("/chat", async (c) => {
     return c.json({ error: "Message is required" }, 400);
   }
 
-  // ─── Ambil data keuangan + bangun system prompt ──────────
-  const ctx = await buildFinancialContext(user.userId, true);
+  // ─── Deteksi intent + bangun system prompt ──────────────
+  const { intent, timeRange } = analyzeIntent(message);
+  const wantsChart =
+    /\b(grafik|chart|bagan|diagram|visualisasi|tampilkan|lihat)\b/i.test(
+      message,
+    );
+  const ctx = await buildFinancialContext(
+    user.userId,
+    intent,
+    timeRange,
+    false,
+    wantsChart,
+  );
   const { systemPrompt, accounts, categories } = ctx;
 
   const userMessage: ChatMessage = image
@@ -672,8 +1153,21 @@ aiRoutes.post("/chat/sync", async (c) => {
     return c.json({ error: "Message is required" }, 400);
   }
 
-  // ─── Ambil data keuangan + bangun system prompt ──────────
-  const ctx = await buildFinancialContext(user.userId, true, draft);
+  // ─── Deteksi intent + bangun system prompt ──────────────
+  const { intent, timeRange } = analyzeIntent(message);
+  // draft mode selalu butuh full context (transaksi)
+  const finalIntent = draft ? "transaksi" : intent;
+  const wantsChart =
+    /\b(grafik|chart|bagan|diagram|visualisasi|tampilkan|lihat)\b/i.test(
+      message,
+    );
+  const ctx = await buildFinancialContext(
+    user.userId,
+    finalIntent,
+    timeRange,
+    draft,
+    wantsChart,
+  );
   const { systemPrompt, accounts } = ctx;
 
   const userMessage: ChatMessage = image

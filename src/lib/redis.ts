@@ -56,4 +56,9 @@ export async function invalidatePattern(pattern: string): Promise<void> {
   }
 }
 
+// ─── Helper: clear user AI cache ──────────────────────────────
+export async function clearUserAiCache(userId: string): Promise<void> {
+  await invalidatePattern(`user:context:${userId}:*`);
+}
+
 export default redis;

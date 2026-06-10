@@ -254,6 +254,7 @@ class AIProviderManager {
             temperature: options.temperature ?? 0.7,
             max_tokens: options.maxTokens ?? 2048,
             stream: false,
+            ...(options.jsonMode ? { response_format: { type: "json_object" } } : {}),
           });
 
           const content = response.choices?.[0]?.message?.content || "";

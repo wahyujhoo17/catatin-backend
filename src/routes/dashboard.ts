@@ -166,7 +166,7 @@ dashboard.get("/summary", async (c) => {
     }
   } catch (err) {
     console.error("Gagal generate AI Insight:", err);
-    aiInsight = "Ayo mulai kelola keuanganmu bersama Catatin! 🚀";
+    aiInsight = "Ayo mulai kelola keuanganmu bersama Catatin.";
   }
 
   return c.json({
@@ -188,6 +188,243 @@ dashboard.get("/summary", async (c) => {
       isExpense: tx.type === "EXPENSE",
     })),
     topCategories,
+  });
+});
+
+// ─── GET /api/dashboard/chart ─────────────────────────────────────
+dashboard.get("/chart", async (c) => {
+  const { userId } = c.get("user");
+  const range = c.req.query("range") || "today";
+
+  const now = new Date();
+  let startDate: Date;
+  let endDate: Date = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  
+  let chartData: { label: string; income: number; expense: number }[] = [];
+  let diffDays = 1;
+  
+  if (range === "today") {
+    // Start of today: 00:00:00
+    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    // 24 hours
+    for (let i = 0; i < 24; i++) {
+      const label = `${String(i).padStart(2, "0")}:00`;
+      chartData.push({ label, income: 0, expense: 0 });
+    }
+  } else if (range === "week") {
+    // Last 7 days
+    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0);
+    diffDays = 7;
+    const dayNames = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+      const label = `${dayNames[d.getDay()]} (${d.getDate()}/${d.getMonth() + 1})`;
+      chartData.push({ label, income: 0, expense: 0 });
+    }
+  } else if (range === "month") {
+    // Last 30 days
+    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29, 0, 0, 0, 0);
+    diffDays = 30;
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+      const label = `${d.getDate()}/${d.getMonth() + 1}`;
+      chartData.push({ label, income: 0, expense: 0 });
+    }
+  } else if (range === "year") {
+    // Last 12 months
+    startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1, 0, 0, 0, 0);
+    diffDays = 365;
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const label = monthNames[d.getMonth()];
+      chartData.push({ label, income: 0, expense: 0 });
+    }
+  } else if (range === "custom") {
+    const startStr = c.req.query("start");
+    const endStr = c.req.query("end");
+    if (!startStr || !endStr) {
+      return c.json({ error: "start and end dates are required for custom range" }, 400);
+    }
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return c.json({ error: "Invalid start or end date format" }, 400);
+    }
+
+    startDate = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0, 0, 0, 0);
+    endDate = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
+
+    const diffTime = endDate.getTime() - startDate.getTime();
+    diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    if (diffDays <= 0) diffDays = 1;
+
+    if (diffDays <= 1) {
+      // 24 hours
+      for (let i = 0; i < 24; i++) {
+        const label = `${String(i).padStart(2, "0")}:00`;
+        chartData.push({ label, income: 0, expense: 0 });
+      }
+    } else if (diffDays <= 8) {
+      const dayNames = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+      for (let i = 0; i < diffDays; i++) {
+        const d = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i);
+        const label = `${dayNames[d.getDay()]} (${d.getDate()}/${d.getMonth() + 1})`;
+        chartData.push({ label, income: 0, expense: 0 });
+      }
+    } else if (diffDays <= 31) {
+      for (let i = 0; i < diffDays; i++) {
+        const d = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i);
+        const label = `${d.getDate()}/${d.getMonth() + 1}`;
+        chartData.push({ label, income: 0, expense: 0 });
+      }
+    } else {
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+      const startMonth = startDate.getMonth();
+      const startYear = startDate.getFullYear();
+      const endMonth = endDate.getMonth();
+      const endYear = endDate.getFullYear();
+      const totalMonths = (endYear - startYear) * 12 + (endMonth - startMonth) + 1;
+      
+      for (let i = 0; i < totalMonths; i++) {
+        const d = new Date(startYear, startMonth + i, 1);
+        const label = `${monthNames[d.getMonth()]} ${String(d.getFullYear()).slice(-2)}`;
+        chartData.push({ label, income: 0, expense: 0 });
+      }
+    }
+  } else {
+    return c.json({ error: "Invalid range parameter" }, 400);
+  }
+
+  // Fetch all transactions in the range
+  const transactions = await prisma.transaction.findMany({
+    where: {
+      userId,
+      date: { gte: startDate, lte: endDate },
+      type: { in: ["INCOME", "EXPENSE"] }
+    },
+    orderBy: { date: "asc" },
+    include: {
+      category: { select: { name: true, icon: true, color: true } }
+    }
+  });
+
+  // Populate chartData
+  let totalIncome = 0;
+  let totalExpense = 0;
+
+  for (const tx of transactions) {
+    const txDate = new Date(tx.date);
+    let index = -1;
+
+    if (range === "today" || (range === "custom" && diffDays <= 1)) {
+      index = txDate.getHours();
+    } else if (range === "week" || (range === "custom" && diffDays <= 8)) {
+      // Find difference in days
+      const diffTime = txDate.getTime() - startDate.getTime();
+      const diffDaysIndex = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDaysIndex >= 0 && diffDaysIndex < chartData.length) {
+        index = diffDaysIndex;
+      }
+    } else if (range === "month" || (range === "custom" && diffDays <= 31)) {
+      const diffTime = txDate.getTime() - startDate.getTime();
+      const diffDaysIndex = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDaysIndex >= 0 && diffDaysIndex < chartData.length) {
+        index = diffDaysIndex;
+      }
+    } else if (range === "year" || (range === "custom" && diffDays > 31)) {
+      // Find difference in months
+      const diffMonths = (txDate.getFullYear() - startDate.getFullYear()) * 12 + (txDate.getMonth() - startDate.getMonth());
+      if (diffMonths >= 0 && diffMonths < chartData.length) {
+        index = diffMonths;
+      }
+    }
+
+    if (index >= 0 && index < chartData.length) {
+      if (tx.type === "INCOME") {
+        chartData[index].income += tx.amount;
+        totalIncome += tx.amount;
+      } else if (tx.type === "EXPENSE") {
+        chartData[index].expense += tx.amount;
+        totalExpense += tx.amount;
+      }
+    }
+  }
+
+  // Group by category for breakdown (ONLY FOR EXPENSES)
+  const categoryMap = new Map<string, { name: string; icon: string; color: string; amount: number; count: number }>();
+  for (const tx of transactions) {
+    if (tx.type !== "EXPENSE") continue;
+    const catId = tx.categoryId || "general";
+    const catName = tx.category?.name || "Umum";
+    const catIcon = tx.category?.icon || "receipt_long";
+    const catColor = tx.category?.color || "var(--secondary)";
+
+    const existing = categoryMap.get(catId) || { name: catName, icon: catIcon, color: catColor, amount: 0, count: 0 };
+    existing.amount += tx.amount;
+    existing.count += 1;
+    categoryMap.set(catId, existing);
+  }
+
+  const categoryBreakdown = Array.from(categoryMap.values()).map(cat => ({
+    name: cat.name,
+    icon: cat.icon,
+    color: cat.color,
+    amount: cat.amount,
+    count: cat.count,
+    percentage: totalExpense > 0 ? Math.round((cat.amount / totalExpense) * 100) : 0
+  })).sort((a, b) => b.amount - a.amount);
+
+  // Summary statistics
+  const netSavings = totalIncome - totalExpense;
+  const expenseRatio = totalIncome > 0 ? Math.round((totalExpense / totalIncome) * 100) : (totalExpense > 0 ? 100 : 0);
+  
+  // Calculate average daily expense
+  const avgDailyExpense = Math.round(totalExpense / diffDays);
+
+  // Recommendations
+  let recommendation = "";
+  if (totalExpense === 0) {
+    recommendation = "Belum ada pengeluaran terdeteksi. Pertahankan pencatatan tertibmu.";
+  } else if (expenseRatio > 80) {
+    const topCat = categoryBreakdown[0];
+    recommendation = `Pengeluaranmu sudah mencapai ${expenseRatio}% dari pemasukan. Kurangi pengeluaran untuk ${topCat ? topCat.name : "kategori teratas"} ya.`;
+  } else if (expenseRatio > 50) {
+    recommendation = `Keuanganmu cukup stabil, namun ingat untuk menyisihkan setidaknya 20% untuk tabungan dan investasi.`;
+  } else {
+    recommendation = `Luar biasa! Rasio pengeluaranmu hanya ${expenseRatio}%. Pertahankan gaya hidup hemat ini.`;
+  }
+
+  // Fetch account balances for the user
+  const accountsData = await prisma.account.findMany({
+    where: { userId },
+    select: { id: true, name: true, type: true, balance: true, icon: true, color: true },
+    orderBy: { balance: "desc" }
+  });
+
+  return c.json({
+    summary: {
+      totalIncome,
+      totalExpense,
+      netSavings,
+      expenseRatio,
+      avgDailyExpense,
+      recommendation
+    },
+    chartData,
+    categoryBreakdown,
+    transactions: transactions.map(tx => ({
+      id: tx.id,
+      type: tx.type,
+      amount: tx.amount,
+      description: tx.description || "Tanpa deskripsi",
+      category: tx.category?.name || "Umum",
+      categoryIcon: tx.category?.icon || "receipt_long",
+      categoryColor: tx.category?.color || "var(--secondary)",
+      date: tx.date,
+      isExpense: tx.type === "EXPENSE"
+    })),
+    accounts: accountsData
   });
 });
 

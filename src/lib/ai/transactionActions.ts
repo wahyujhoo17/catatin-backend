@@ -1,4 +1,5 @@
 import prisma from "../prisma";
+import { clearUserAiCache } from "../redis";
 
 export const processTransactionActions = async (content: string, userId: string, accounts: any[]) => {
   const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction)\s*\]([\s\S]*?)\[\/ACTION\]/g;
@@ -181,6 +182,17 @@ export const processTransactionActions = async (content: string, userId: string,
       });
     } catch (parseErr) {
       console.warn("[AI] Gagal parse action:", parseErr);
+    }
+  }
+
+  const hasDbChanges = processedEvents.some(
+    (e) => e.action === "delete" || e.action === "update" || e.action === "record",
+  );
+  if (hasDbChanges) {
+    try {
+      await clearUserAiCache(userId);
+    } catch (err) {
+      console.error("[Cache] Failed to clear user AI cache in transactionActions:", err);
     }
   }
 

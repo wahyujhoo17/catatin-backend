@@ -32,6 +32,7 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   stream?: boolean;
+  jsonMode?: boolean;
 }
 
 export interface AIStreamEvent {

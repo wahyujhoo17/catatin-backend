@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import prisma from "../lib/prisma";
 import { authMiddleware } from "../middleware/auth";
 import { createTransactionSchema } from "../validators";
+import { clearUserAiCache } from "../lib/redis";
 
 const transactions = new Hono();
 transactions.use("*", authMiddleware);
@@ -123,6 +124,12 @@ transactions.post("/", async (c) => {
     });
   }
 
+  try {
+    await clearUserAiCache(userId);
+  } catch (err) {
+    console.error("[Cache] Failed to clear user AI cache on transaction creation:", err);
+  }
+
   return c.json({ message: "Transaksi berhasil", transaction }, 201);
 });
 
@@ -181,6 +188,12 @@ transactions.put("/:id", async (c) => {
     });
   });
 
+  try {
+    await clearUserAiCache(userId);
+  } catch (err) {
+    console.error("[Cache] Failed to clear user AI cache on transaction update:", err);
+  }
+
   return c.json({ message: "Transaksi berhasil diperbarui", transaction });
 });
 
@@ -204,6 +217,13 @@ transactions.delete("/:id", async (c) => {
     }
     await prismaTx.transaction.delete({ where: { id } });
   });
+
+  try {
+    await clearUserAiCache(userId);
+  } catch (err) {
+    console.error("[Cache] Failed to clear user AI cache on transaction deletion:", err);
+  }
+
   return c.json({ message: "Transaksi berhasil dihapus" });
 });
 

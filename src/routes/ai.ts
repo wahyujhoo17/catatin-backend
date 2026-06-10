@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import prisma from "../lib/prisma";
+import redis, { clearUserAiCache } from "../lib/redis";
 import { authMiddleware } from "../middleware/auth";
 import { aiManager } from "../lib/ai/providerManager";
 import type { ChatMessage } from "../lib/ai/types";
@@ -378,7 +379,7 @@ OUTPUT: HANYA JSON, tanpa markdown, tanpa \`\`\`, tanpa penjelasan.`;
         { role: "system", content: prompt },
         { role: "user", content: message },
       ],
-      { temperature: 0, maxTokens: 256 },
+      { temperature: 0, maxTokens: 256, jsonMode: true },
     );
 
     const raw = response.content.trim();
@@ -648,6 +649,96 @@ function analyzeIntent(message: string): {
   return { intent: "lengkap", timeRange: null };
 }
 
+async function extractIntentAndTemporal(
+  message: string,
+): Promise<{
+  intent: ChatIntent;
+  timeRange: TimeRange | null;
+}> {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const date = String(now.getDate()).padStart(2, "0");
+  const todayStr = `${year}-${month}-${date}`;
+  const dayName = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"][now.getDay()];
+
+  const prompt = `Kamu AI ekstraktor intent dan rentang tanggal untuk asisten keuangan Catatin.
+Tanggal hari ini adalah: ${todayStr} (Hari ${dayName}).
+
+Tugasmu adalah menganalisis pesan user dan mengekstrak:
+1. Intent (non_finansial | saldo | pengeluaran | pemasukan | transaksi | lengkap)
+2. Rentang tanggal jika ditanyakan (start date dan end date dalam format YYYY-MM-DD)
+3. Label penjelas rentang tersebut (misal: "3 hari terakhir").
+
+Definisi Intent:
+- non_finansial: sapaan, bantuan, ucapan terima kasih, atau topik di luar keuangan.
+- saldo: menanyakan jumlah uang yang dimiliki, sisa saldo tabungan/rekening.
+- pengeluaran: menanyakan jumlah uang yang dihabiskan, belanjaan, biaya hidup, pengeluaran.
+- pemasukan: menanyakan gaji, bonus, komisi, uang masuk.
+- transaksi: berniat melakukan transaksi baru (misal: "catat makan 50k", "bayar listrik 100rb"), atau mengubah/menghapus transaksi lama.
+- lengkap: menanyakan ikhtisar keuangan umum, summary bulanan lengkap, atau gabungan saldo + pengeluaran.
+
+Pedoman Rentang Tanggal (Hitung secara relatif terhadap hari ini: ${todayStr}):
+- "hari ini": start dan end adalah hari ini (${todayStr}).
+- "kemarin": start dan end adalah kemarin.
+- "3 hari kebelakang" / "3 hari terakhir" / "3 hari lalu": start = hari ini minus 2 hari (contoh jika hari ini 2026-06-10, start = 2026-06-08), end = hari ini (${todayStr}).
+- "minggu lalu": start = hari Senin minggu lalu, end = hari Minggu minggu lalu.
+- "minggu ini": start = hari Senin minggu ini, end = hari ini (${todayStr}).
+- "bulan lalu": start = tanggal 1 bulan lalu, end = tanggal terakhir bulan lalu.
+- "bulan ini": start = tanggal 1 bulan ini, end = hari ini (${todayStr}).
+- Jika user menyebut tanggal spesifik (misal "dari tanggal 1 sampai 5 mei 2026"), hitung rentang tanggal tersebut secara presisi.
+- Jika tidak ada rentang tanggal spesifik yang ditanyakan, kembalikan null untuk startDate dan endDate.
+
+Keluaran harus berupa JSON valid tanpa penjelasan apa pun, tanpa markdown code blocks.
+Format JSON:
+{
+  "intent": "pengeluaran",
+  "startDate": "YYYY-MM-DD" | null,
+  "endDate": "YYYY-MM-DD" | null,
+  "label": "label rentang waktu" | null
+}
+`;
+
+  try {
+    const res = await aiManager.chat([
+      { role: "system", content: prompt },
+      { role: "user", content: message }
+    ], { temperature: 0, maxTokens: 200, jsonMode: true });
+
+    const raw = res.content.trim();
+    const cleanJson = raw
+      .replace(/^```(?:json)?\s*\n?/i, "")
+      .replace(/\n?```\s*$/i, "")
+      .trim();
+
+    const parsed = JSON.parse(cleanJson);
+    if (!parsed || !parsed.intent) {
+      return analyzeIntent(message);
+    }
+
+    let timeRange: TimeRange | null = null;
+    if (parsed.startDate && parsed.endDate) {
+      const start = new Date(parsed.startDate + "T00:00:00");
+      const end = new Date(parsed.endDate + "T23:59:59.999");
+      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        timeRange = {
+          start,
+          end,
+          label: parsed.label || "rentang kustom"
+        };
+      }
+    }
+
+    return {
+      intent: parsed.intent as ChatIntent,
+      timeRange
+    };
+  } catch (err) {
+    console.error("[AI] Intent LLM extractor failed, falling back to regex:", err);
+    return analyzeIntent(message);
+  }
+}
+
 async function buildFinancialContext(
   userId: string,
   intent: ChatIntent,
@@ -665,6 +756,21 @@ async function buildFinancialContext(
     end: now,
     label: intent === "transaksi" ? "hari ini" : "bulan ini",
   };
+
+  // ─── Caching Check ───────────────────────────────────────
+  const cacheKey = `user:context:${userId}:${intent}:${range.start.getTime()}:${range.end.getTime()}:${draftMode}:${wantsChart}`;
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        console.log(`[AI] Cache HIT for key: ${cacheKey}`);
+        return JSON.parse(cached) as FinancialContext;
+      }
+      console.log(`[AI] Cache MISS for key: ${cacheKey}`);
+    } catch (err) {
+      console.warn("[AI] Error reading from Redis cache:", err);
+    }
+  }
 
   // ─── Tentukan data yang dibutuhkan ──────────────────────
   const needFullContext = intent === "transaksi";
@@ -823,15 +929,21 @@ async function buildFinancialContext(
   const incomeCount = d.incAgg._count || 0; // FIX: sekarang ada _count
   const recentTx = d.recentTx as any[];
 
+  // Hitung jumlah hari dalam periode untuk rata-rata harian
+  const diffTime = Math.abs(range.end.getTime() - range.start.getTime());
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
+  const avgDailyExpense = Math.round(expenseTotal / diffDays);
+  const avgPerTx = expenseCount > 0 ? Math.round(expenseTotal / expenseCount) : 0;
+
   const dataParts: string[] = [];
   if (intent !== "non_finansial") {
     dataParts.push(`Total Saldo: Rp${totalBalance.toLocaleString("id-ID")}`);
     dataParts.push(`Akun: [${accountListClean}]`);
   }
-  dataParts.push(`Periode: ${range.label}`);
+  dataParts.push(`Periode: ${range.label} (${diffDays} hari)`);
 
   if (needExpense && (expenseTotal > 0 || expenseCount > 0)) {
-    let expStr = `Pengeluaran: ${expenseCount} tx | total Rp${expenseTotal.toLocaleString("id-ID")}`;
+    let expStr = `Pengeluaran: ${expenseCount} tx | total Rp${expenseTotal.toLocaleString("id-ID")} | Rata-rata Harian: Rp${avgDailyExpense.toLocaleString("id-ID")}/hari | Rata-rata per Transaksi: Rp${avgPerTx.toLocaleString("id-ID")}`;
     const catStr = fmtCatBreakdown(d.expByCat);
     if (catStr) expStr += ` | per-kategori: ${catStr}`;
     dataParts.push(expStr);
@@ -1044,18 +1156,33 @@ async function buildFinancialContext(
         "  * Saldo menipis / pengeluaran >50% → ingatkan hemat, beri tips.\n" +
         "  * JANGAN bilang 'Masih aman'/'Lumayan' jika kondisi buruk.\n\n" +
         dataSection;
-      break;
+  }
+
+  // ─── Hallucination Prevention ────────────────────────────
+  if (intent !== "non_finansial") {
+    systemContent += "\n\nPENTING: JANGAN PERNAH mengarang, mengasumsikan, atau menyebutkan detail/contoh transaksi spesifik (seperti nama makanan konkret 'pecel', 'kopi', atau barang belanjaan) yang tidak tertulis secara eksplisit dalam DATA. Jika hanya ada kategori (contoh: Makanan), gunakan nama kategori tersebut tanpa membuat contoh konkret sendiri.";
   }
 
   console.log(
     `[AI] intent=${intent} range=${range.label} rangeDays=${rangeDays} | prompt=${systemContent.length} chars`,
   );
 
-  return {
+  const context: FinancialContext = {
     systemPrompt: { role: "system", content: systemContent },
     accounts,
     categories,
   };
+
+  if (redis) {
+    try {
+      await redis.setex(cacheKey, 120, JSON.stringify(context));
+      console.log(`[AI] Cache SET for key: ${cacheKey} (TTL 2m)`);
+    } catch (err) {
+      console.warn("[AI] Error writing to Redis cache:", err);
+    }
+  }
+
+  return context;
 }
 
 // ─── Safety net: hapus ID internal yang bocor dari respons AI ──
@@ -1315,6 +1442,12 @@ aiRoutes.post("/chat", async (c) => {
           return created;
         });
 
+        try {
+          await clearUserAiCache(user.userId);
+        } catch (err) {
+          console.error("[Cache] Failed to clear user AI cache on early write:", err);
+        }
+
         const formattedAmount = txClass.amount!.toLocaleString("id-ID");
         const desc = txClass.description || "Transaksi";
         const responseText = `✅ **${desc}** Rp${formattedAmount} dicatat dari **${matchedAccount.name}**.`;
@@ -1374,7 +1507,7 @@ aiRoutes.post("/chat", async (c) => {
   }
 
   // ─── Deteksi intent + bangun system prompt ──────────────
-  let { intent, timeRange } = analyzeIntent(message);
+  let { intent, timeRange } = await extractIntentAndTemporal(message);
 
   // Override intent jika LLM classifier mendeteksi transaksi (meski incomplete)
   if (txClass?.isTransaction) {
@@ -1434,10 +1567,12 @@ aiRoutes.post("/chat", async (c) => {
   };
 
   // ─── Format history ─────────────────────────────────────
-  const formattedHistory: ChatMessage[] = (history || []).map((h: any) => ({
-    role: h.type === "bot" ? "assistant" : "user",
-    content: h.text,
-  }));
+  const formattedHistory: ChatMessage[] = (history || [])
+    .slice(-10)
+    .map((h: any) => ({
+      role: h.type === "bot" ? "assistant" : "user",
+      content: h.text,
+    }));
 
   // ─── Deteksi follow-up: user membalas dengan nama akun ──
   if (intent === "lengkap" && message.length <= 30 && !/\d/.test(message)) {
@@ -1539,6 +1674,12 @@ aiRoutes.post("/chat", async (c) => {
 
               return created;
             });
+
+            try {
+              await clearUserAiCache(user.userId);
+            } catch (err) {
+              console.error("[Cache] Failed to clear user AI cache on follow-up write:", err);
+            }
 
             const formattedAmount = parsed.amount.toLocaleString("id-ID");
             const responseText = `✅ **${parsed.description}** Rp${formattedAmount} dicatat dari **${matchedAccount.name}**.`;
@@ -1711,7 +1852,7 @@ aiRoutes.post("/chat/sync", async (c) => {
   }
 
   // ─── Deteksi intent + bangun system prompt ──────────────
-  let { intent, timeRange } = analyzeIntent(message);
+  let { intent, timeRange } = await extractIntentAndTemporal(message);
   // draft mode selalu butuh full context (transaksi)
   let finalIntent = draft ? "transaksi" : intent;
   const wantsChart =

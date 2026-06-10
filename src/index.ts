@@ -43,7 +43,7 @@ app.use(
       return null;
     },
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
+    allowHeaders: ["Content-Type", "Authorization", "x-timezone", "X-Timezone"],
     exposeHeaders: [
       "X-RateLimit-Limit",
       "X-RateLimit-Remaining",

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import prisma from "../lib/prisma";
 import { authMiddleware } from "../middleware/auth";
 import { aiManager } from "../lib/ai/providerManager";
+import { getDateParts, createDateInTimeZone } from "../lib/timezone";
 
 const dashboard = new Hono();
 dashboard.use("*", authMiddleware);
@@ -195,49 +196,74 @@ dashboard.get("/summary", async (c) => {
 dashboard.get("/chart", async (c) => {
   const { userId } = c.get("user");
   const range = c.req.query("range") || "today";
+  const tz = c.req.header("x-timezone") || "Asia/Jakarta";
 
   const now = new Date();
+  const nowParts = getDateParts(now, tz);
   let startDate: Date;
-  let endDate: Date = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  let endDate: Date;
   
   let chartData: { label: string; income: number; expense: number }[] = [];
   let diffDays = 1;
   
   if (range === "today") {
-    // Start of today: 00:00:00
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    startDate = createDateInTimeZone(nowParts.year, nowParts.month, nowParts.day, 0, 0, 0, 0, tz);
+    endDate = createDateInTimeZone(nowParts.year, nowParts.month, nowParts.day, 23, 59, 59, 999, tz);
+    
     // 24 hours
     for (let i = 0; i < 24; i++) {
       const label = `${String(i).padStart(2, "0")}:00`;
       chartData.push({ label, income: 0, expense: 0 });
     }
   } else if (range === "week") {
-    // Last 7 days
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0);
+    // Last 7 days in the target timezone
+    const todayStart = createDateInTimeZone(nowParts.year, nowParts.month, nowParts.day, 0, 0, 0, 0, tz);
+    startDate = new Date(todayStart.getTime() - 6 * 24 * 60 * 60 * 1000);
+    endDate = createDateInTimeZone(nowParts.year, nowParts.month, nowParts.day, 23, 59, 59, 999, tz);
     diffDays = 7;
     const dayNames = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+    
     for (let i = 6; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      const label = `${dayNames[d.getDay()]} (${d.getDate()}/${d.getMonth() + 1})`;
+      const targetDate = new Date(todayStart.getTime() - i * 24 * 60 * 60 * 1000);
+      const dayParts = getDateParts(targetDate, tz);
+      const dayOfWeek = new Date(Date.UTC(dayParts.year, dayParts.month, dayParts.day)).getUTCDay();
+      const label = `${dayNames[dayOfWeek]} (${dayParts.day}/${dayParts.month + 1})`;
       chartData.push({ label, income: 0, expense: 0 });
     }
   } else if (range === "month") {
-    // Last 30 days
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29, 0, 0, 0, 0);
+    // Last 30 days in the target timezone
+    const todayStart = createDateInTimeZone(nowParts.year, nowParts.month, nowParts.day, 0, 0, 0, 0, tz);
+    startDate = new Date(todayStart.getTime() - 29 * 24 * 60 * 60 * 1000);
+    endDate = createDateInTimeZone(nowParts.year, nowParts.month, nowParts.day, 23, 59, 59, 999, tz);
     diffDays = 30;
+    
     for (let i = 29; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      const label = `${d.getDate()}/${d.getMonth() + 1}`;
+      const targetDate = new Date(todayStart.getTime() - i * 24 * 60 * 60 * 1000);
+      const dayParts = getDateParts(targetDate, tz);
+      const label = `${dayParts.day}/${dayParts.month + 1}`;
       chartData.push({ label, income: 0, expense: 0 });
     }
   } else if (range === "year") {
-    // Last 12 months
-    startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1, 0, 0, 0, 0);
+    // Last 12 months in the target timezone
+    let startMonth = nowParts.month - 11;
+    let startYear = nowParts.year;
+    if (startMonth < 0) {
+      startMonth += 12;
+      startYear -= 1;
+    }
+    startDate = createDateInTimeZone(startYear, startMonth, 1, 0, 0, 0, 0, tz);
+    endDate = createDateInTimeZone(nowParts.year, nowParts.month, nowParts.day, 23, 59, 59, 999, tz);
     diffDays = 365;
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+    
     for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const label = monthNames[d.getMonth()];
+      let m = nowParts.month - i;
+      let y = nowParts.year;
+      if (m < 0) {
+        m += 12;
+        y -= 1;
+      }
+      const label = monthNames[m];
       chartData.push({ label, income: 0, expense: 0 });
     }
   } else if (range === "custom") {
@@ -252,8 +278,8 @@ dashboard.get("/chart", async (c) => {
       return c.json({ error: "Invalid start or end date format" }, 400);
     }
 
-    startDate = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0, 0, 0, 0);
-    endDate = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
+    startDate = createDateInTimeZone(start.getFullYear(), start.getMonth(), start.getDate(), 0, 0, 0, 0, tz);
+    endDate = createDateInTimeZone(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999, tz);
 
     const diffTime = endDate.getTime() - startDate.getTime();
     diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -268,27 +294,33 @@ dashboard.get("/chart", async (c) => {
     } else if (diffDays <= 8) {
       const dayNames = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
       for (let i = 0; i < diffDays; i++) {
-        const d = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i);
-        const label = `${dayNames[d.getDay()]} (${d.getDate()}/${d.getMonth() + 1})`;
+        const targetDate = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
+        const dayParts = getDateParts(targetDate, tz);
+        const dayOfWeek = new Date(Date.UTC(dayParts.year, dayParts.month, dayParts.day)).getUTCDay();
+        const label = `${dayNames[dayOfWeek]} (${dayParts.day}/${dayParts.month + 1})`;
         chartData.push({ label, income: 0, expense: 0 });
       }
     } else if (diffDays <= 31) {
       for (let i = 0; i < diffDays; i++) {
-        const d = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i);
-        const label = `${d.getDate()}/${d.getMonth() + 1}`;
+        const targetDate = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
+        const dayParts = getDateParts(targetDate, tz);
+        const label = `${dayParts.day}/${dayParts.month + 1}`;
         chartData.push({ label, income: 0, expense: 0 });
       }
     } else {
       const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-      const startMonth = startDate.getMonth();
-      const startYear = startDate.getFullYear();
-      const endMonth = endDate.getMonth();
-      const endYear = endDate.getFullYear();
-      const totalMonths = (endYear - startYear) * 12 + (endMonth - startMonth) + 1;
+      const startParts = getDateParts(startDate, tz);
+      const endParts = getDateParts(endDate, tz);
+      const totalMonths = (endParts.year - startParts.year) * 12 + (endParts.month - startParts.month) + 1;
       
       for (let i = 0; i < totalMonths; i++) {
-        const d = new Date(startYear, startMonth + i, 1);
-        const label = `${monthNames[d.getMonth()]} ${String(d.getFullYear()).slice(-2)}`;
+        let m = startParts.month + i;
+        let y = startParts.year;
+        while (m >= 12) {
+          m -= 12;
+          y += 1;
+        }
+        const label = `${monthNames[m]} ${String(y).slice(-2)}`;
         chartData.push({ label, income: 0, expense: 0 });
       }
     }
@@ -315,26 +347,22 @@ dashboard.get("/chart", async (c) => {
 
   for (const tx of transactions) {
     const txDate = new Date(tx.date);
+    const txParts = getDateParts(txDate, tz);
     let index = -1;
 
     if (range === "today" || (range === "custom" && diffDays <= 1)) {
-      index = txDate.getHours();
-    } else if (range === "week" || (range === "custom" && diffDays <= 8)) {
-      // Find difference in days
-      const diffTime = txDate.getTime() - startDate.getTime();
-      const diffDaysIndex = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-      if (diffDaysIndex >= 0 && diffDaysIndex < chartData.length) {
-        index = diffDaysIndex;
-      }
-    } else if (range === "month" || (range === "custom" && diffDays <= 31)) {
-      const diffTime = txDate.getTime() - startDate.getTime();
-      const diffDaysIndex = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      index = txParts.hour;
+    } else if (range === "week" || range === "month" || (range === "custom" && diffDays <= 31)) {
+      const txLocalDayStart = Date.UTC(txParts.year, txParts.month, txParts.day);
+      const startParts = getDateParts(startDate, tz);
+      const startLocalDayStart = Date.UTC(startParts.year, startParts.month, startParts.day);
+      const diffDaysIndex = Math.floor((txLocalDayStart - startLocalDayStart) / (1000 * 60 * 60 * 24));
       if (diffDaysIndex >= 0 && diffDaysIndex < chartData.length) {
         index = diffDaysIndex;
       }
     } else if (range === "year" || (range === "custom" && diffDays > 31)) {
-      // Find difference in months
-      const diffMonths = (txDate.getFullYear() - startDate.getFullYear()) * 12 + (txDate.getMonth() - startDate.getMonth());
+      const startParts = getDateParts(startDate, tz);
+      const diffMonths = (txParts.year - startParts.year) * 12 + (txParts.month - startParts.month);
       if (diffMonths >= 0 && diffMonths < chartData.length) {
         index = diffMonths;
       }

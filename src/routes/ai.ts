@@ -671,8 +671,25 @@ async function extractIntentAndTemporal(
   const todayStr = `${year}-${month}-${date}`;
   const dayName = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"][now.getDay()];
 
+  // Calculate dates of the current week (Monday to Sunday)
+  const dayOfWeek = now.getDay();
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const mondayDate = new Date(now);
+  mondayDate.setDate(now.getDate() + mondayOffset);
+
+  const formatDt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const daysInd = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
+  const weekDatesList = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(mondayDate);
+    d.setDate(mondayDate.getDate() + i);
+    weekDatesList.push(`${daysInd[i]} (${formatDt(d)})`);
+  }
+  const weekDatesStr = weekDatesList.join(", ");
+
   const prompt = `Kamu AI ekstraktor intent dan rentang tanggal untuk asisten keuangan Catatin.
 Tanggal hari ini adalah: ${todayStr} (Hari ${dayName}).
+Daftar hari dan tanggal untuk minggu berjalan ini adalah: ${weekDatesStr}.
 
 Tugasmu adalah menganalisis pesan user dan mengekstrak:
 1. Intent (non_finansial | saldo | pengeluaran | pemasukan | transaksi | lengkap)
@@ -691,7 +708,7 @@ Pedoman Rentang Tanggal (Hitung secara relatif terhadap hari ini: ${todayStr}):
 - "hari ini": start dan end adalah hari ini (${todayStr}).
 - "kemarin": start dan end adalah kemarin.
 - "3 hari kebelakang" / "3 hari terakhir" / "3 hari lalu": start = hari ini minus 2 hari (contoh jika hari ini 2026-06-10, start = 2026-06-08), end = hari ini (${todayStr}).
-- Hari dalam seminggu (Senin, Selasa, Rabu, Kamis, Jumat, Sabtu, Minggu): hitung relatif terhadap minggu berjalan (dimulai hari Senin). Contoh jika hari ini Kamis 2026-06-11, maka Senin minggu ini adalah 2026-06-08. Jika user menanyakan "dari senin sampai hari ini", maka startDate adalah 2026-06-08 dan endDate adalah 2026-06-11.
+- Hari dalam seminggu (Senin, Selasa, Rabu, Kamis, Jumat, Sabtu, Minggu): Gunakan daftar hari dan tanggal minggu berjalan di atas untuk menentukan tanggal hari tersebut secara presisi. Contoh jika hari ini Kamis 2026-06-11 dan user menanyakan "dari senin sampai hari ini", maka startDate adalah 2026-06-08 (tanggal Senin minggu ini) dan endDate adalah 2026-06-11.
 - "minggu lalu": start = hari Senin minggu lalu, end = hari Minggu minggu lalu.
 - "minggu ini": start = hari Senin minggu ini, end = hari ini (${todayStr}).
 - "bulan lalu": start = tanggal 1 bulan lalu, end = tanggal terakhir bulan lalu.

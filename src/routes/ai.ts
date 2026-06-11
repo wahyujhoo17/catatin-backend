@@ -379,7 +379,7 @@ OUTPUT: HANYA JSON, tanpa markdown, tanpa \`\`\`, tanpa penjelasan.`;
         { role: "system", content: prompt },
         { role: "user", content: message },
       ],
-      { temperature: 0, maxTokens: 256, jsonMode: true },
+      { temperature: 0, maxTokens: 1000, jsonMode: true },
     );
 
     const raw = response.content.trim();
@@ -730,7 +730,7 @@ Format JSON:
     const res = await aiManager.chat([
       { role: "system", content: prompt },
       { role: "user", content: message }
-    ], { temperature: 0, maxTokens: 200, jsonMode: true });
+    ], { temperature: 0, maxTokens: 1000, jsonMode: true });
 
     const raw = res.content.trim();
     const cleanJson = raw

@@ -40,11 +40,15 @@ const PROVIDER_DEFAULTS: Record<
     textModel: "Meta-Llama-3.3-70B-Instruct",
     baseUrl: "https://api.sambanova.ai/v1",
   },
+  cerebras: {
+    textModel: "gpt-oss-120b",
+    baseUrl: "https://api.cerebras.ai/v1",
+  },
 };
 
 // ─── Tiered Cost Routing Configuration ─────────────────────
 // Tier 1: Free providers (will be shuffled dynamically to balance load)
-const TEXT_TIER_FREE: ProviderName[] = ["groq", "gemini", "sambanova", "openrouter"];
+const TEXT_TIER_FREE: ProviderName[] = ["groq", "gemini", "sambanova", "openrouter", "cerebras"];
 const VISION_TIER_FREE: ProviderName[] = ["groq", "gemini", "openrouter"];
 
 // Tier 2: Paid fallback providers (only used if all Tier 1 providers fail/cooldown)

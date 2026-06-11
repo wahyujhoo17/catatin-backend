@@ -839,6 +839,10 @@ async function buildFinancialContext(
   const needCatBreakdown = needExpense && !needFullContext;
   // income breakdown: untuk pemasukan, saran, dan lengkap
   const needIncCatBreakdown = (intent === "pemasukan" || intent === "saran" || intent === "lengkap") && !needFullContext;
+  // Daftar transaksi lengkap (deskripsi, kategori, dll): untuk query historis
+  const needTxList =
+    (intent === "pengeluaran" || intent === "pemasukan" || intent === "lengkap" || intent === "saran") &&
+    !needFullContext;
 
   // ─── Bangun query plan ───────────────────────────────────────
   const queries: Promise<any>[] = [];
@@ -915,20 +919,24 @@ async function buildFinancialContext(
       : Promise.resolve([]),
   );
 
-  // Daily breakdown: pengeluaran per tanggal — agar AI bisa jawab "tanggal berapa paling besar"
-  // NOTE: TIDAK pakai groupBy("date") karena date field adalah DateTime (termasuk jam/menit/detik)
-  // sehingga setiap transaksi punya group sendiri. Solusi: fetch semua lalu group di JS.
-  keys.push("expByDate");
+  // txList: list transaksi lengkap untuk query historis
+  keys.push("txList");
   queries.push(
-    needCatBreakdown
+    needTxList
       ? prisma.transaction.findMany({
           where: {
             userId,
             date: { gte: range.start, lte: range.end },
-            type: "EXPENSE",
           },
-          select: { date: true, amount: true },
-          orderBy: { date: "asc" },
+          select: {
+            date: true,
+            type: true,
+            amount: true,
+            description: true,
+            category: { select: { name: true } },
+            account: { select: { name: true } },
+          },
+          orderBy: { date: "desc" },
         })
       : Promise.resolve([]),
   );
@@ -1058,7 +1066,12 @@ async function buildFinancialContext(
     const catStr = fmtCatBreakdown(d.expByCat);
     if (catStr) expStr += ` | per-kategori: ${catStr}`;
     // Tambahkan breakdown per-tanggal agar AI bisa jawab "tanggal paling boros"
-    const dailyStr = fmtDailyBreakdown(d.expByDate);
+    const expByDateList = d.txList
+      ? d.txList
+          .filter((t: any) => t.type === "EXPENSE")
+          .map((t: any) => ({ date: t.date, amount: t.amount }))
+      : [];
+    const dailyStr = fmtDailyBreakdown(expByDateList);
     if (dailyStr) expStr += ` | per-tanggal: ${dailyStr}`;
     dataParts.push(expStr);
   }
@@ -1071,6 +1084,17 @@ async function buildFinancialContext(
     );
     if (incCatStr) incStr += ` | per-kategori: ${incCatStr}`;
     dataParts.push(incStr);
+  }
+
+  if (needTxList && d.txList && d.txList.length > 0) {
+    const txLines = d.txList.map((t: any) => {
+      const dateStr = t.date.toISOString().split("T")[0];
+      const catName = t.category?.name || "Lainnya";
+      const accName = t.account?.name || "Umum";
+      const descStr = t.description || "";
+      return `[${dateStr}|${t.type}|${catName}|Rp${t.amount.toLocaleString("id-ID")}|${descStr}|${accName}]`;
+    });
+    dataParts.push(`Daftar Transaksi: ${txLines.join(", ")}`);
   }
 
   if (needRecentTx && recentTx.length > 0) {

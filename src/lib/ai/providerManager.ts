@@ -36,19 +36,36 @@ const PROVIDER_DEFAULTS: Record<
     visionModel: "gemini-2.5-flash",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
   },
+  sambanova: {
+    textModel: "Meta-Llama-3.3-70B-Instruct",
+    baseUrl: "https://api.sambanova.ai/v1",
+  },
 };
 
-// ─── Separate routing for text vs vision ───────────────────
-// Text priority  : OpenRouter (default) → Gemini → DeepSeek
-// Vision priority: Groq (dedicated KEY_3) → Gemini → OpenRouter
-const PROVIDER_ORDER_TEXT: ProviderName[] = [
-  "openrouter",
-  "gemini",
-  "deepseek",
-  "groq",
-];
+// ─── Tiered Cost Routing Configuration ─────────────────────
+// Tier 1: Free providers (will be shuffled dynamically to balance load)
+const TEXT_TIER_FREE: ProviderName[] = ["groq", "gemini", "sambanova", "openrouter"];
+const VISION_TIER_FREE: ProviderName[] = ["groq", "gemini", "openrouter"];
 
-const PROVIDER_ORDER_VISION: ProviderName[] = ["groq", "gemini", "openrouter"];
+// Tier 2: Paid fallback providers (only used if all Tier 1 providers fail/cooldown)
+const TEXT_TIER_PAID: ProviderName[] = ["deepseek"];
+const VISION_TIER_PAID: ProviderName[] = [];
+
+// Helper to construct dynamic provider order
+function getProviderOrder(vision?: boolean): ProviderName[] {
+  const freeTier = vision ? [...VISION_TIER_FREE] : [...TEXT_TIER_FREE];
+  const paidTier = vision ? [...VISION_TIER_PAID] : [...TEXT_TIER_PAID];
+
+  // Shuffle Tier 1 (Free) to distribute rate-limit load
+  for (let i = freeTier.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [freeTier[i], freeTier[j]] = [freeTier[j], freeTier[i]];
+  }
+
+  const order = [...freeTier, ...paidTier];
+  console.log(`[AI] Routed provider order: ${order.join(" → ")}`);
+  return order;
+}
 
 // ─── Redis keys ───────────────────────────────────────────────
 function rateLimitKey(provider: string, keyIndex: number): string {
@@ -70,8 +87,13 @@ class AIProviderManager {
   // ─── Load providers from environment ────────────────────────
   private loadProviders() {
     const allProviders = [
-      ...new Set([...PROVIDER_ORDER_TEXT, ...PROVIDER_ORDER_VISION]),
-    ];
+      ...new Set([
+        ...TEXT_TIER_FREE,
+        ...TEXT_TIER_PAID,
+        ...VISION_TIER_FREE,
+        ...VISION_TIER_PAID,
+      ]),
+    ] as ProviderName[];
     for (const name of allProviders) {
       const defaults = PROVIDER_DEFAULTS[name];
       const envPrefix = name.toUpperCase();
@@ -214,9 +236,7 @@ class AIProviderManager {
 
     const errors: string[] = [];
 
-    const providerOrder = options.vision
-      ? PROVIDER_ORDER_VISION
-      : PROVIDER_ORDER_TEXT;
+    const providerOrder = getProviderOrder(options.vision);
 
     for (const providerName of providerOrder) {
       const provider = this.providers.get(providerName);
@@ -326,9 +346,7 @@ class AIProviderManager {
 
     let triedAnyProvider = false;
 
-    const providerOrder = options.vision
-      ? PROVIDER_ORDER_VISION
-      : PROVIDER_ORDER_TEXT;
+    const providerOrder = getProviderOrder(options.vision);
 
     for (const providerName of providerOrder) {
       const provider = this.providers.get(providerName);

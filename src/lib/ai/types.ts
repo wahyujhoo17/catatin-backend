@@ -14,7 +14,7 @@ export interface ProviderConfig {
   keys: ApiKey[];
 }
 
-export type ProviderName = "deepseek" | "openrouter" | "groq" | "gemini";
+export type ProviderName = "deepseek" | "openrouter" | "groq" | "gemini" | "sambanova";
 
 // ─── Chat Types ───────────────────────────────────────────────
 export interface ChatMessage {

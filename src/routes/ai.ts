@@ -691,6 +691,7 @@ Pedoman Rentang Tanggal (Hitung secara relatif terhadap hari ini: ${todayStr}):
 - "hari ini": start dan end adalah hari ini (${todayStr}).
 - "kemarin": start dan end adalah kemarin.
 - "3 hari kebelakang" / "3 hari terakhir" / "3 hari lalu": start = hari ini minus 2 hari (contoh jika hari ini 2026-06-10, start = 2026-06-08), end = hari ini (${todayStr}).
+- Hari dalam seminggu (Senin, Selasa, Rabu, Kamis, Jumat, Sabtu, Minggu): hitung relatif terhadap minggu berjalan (dimulai hari Senin). Contoh jika hari ini Kamis 2026-06-11, maka Senin minggu ini adalah 2026-06-08. Jika user menanyakan "dari senin sampai hari ini", maka startDate adalah 2026-06-08 dan endDate adalah 2026-06-11.
 - "minggu lalu": start = hari Senin minggu lalu, end = hari Minggu minggu lalu.
 - "minggu ini": start = hari Senin minggu ini, end = hari ini (${todayStr}).
 - "bulan lalu": start = tanggal 1 bulan lalu, end = tanggal terakhir bulan lalu.
@@ -761,6 +762,10 @@ async function buildFinancialContext(
   wantsChart: boolean = false,
 ): Promise<FinancialContext> {
   const now = new Date();
+  const dayName = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"][now.getDay()];
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const timeContext = `Informasi Waktu: Hari ini adalah hari ${dayName}, tanggal ${todayStr}.\n\n`;
+
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
@@ -1171,6 +1176,9 @@ async function buildFinancialContext(
         "  * JANGAN bilang 'Masih aman'/'Lumayan' jika kondisi buruk.\n\n" +
         dataSection;
   }
+
+  // Prepend current date and day context to help the assistant understand relative queries
+  systemContent = timeContext + systemContent;
 
   // ─── Hallucination Prevention ────────────────────────────
   if (intent !== "non_finansial") {

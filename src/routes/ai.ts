@@ -199,6 +199,13 @@ function isLikelyTransaction(message: string): boolean {
     "lalu",
     "grafik",
     "chart",
+    "tanggal",
+    "terbesar",
+    "terboros",
+    "saran",
+    "analisa",
+    "evaluasi",
+    "apakah",
   ];
 
   const hasActionVerb = actionVerbs.some((kw) => text.includes(kw));
@@ -580,6 +587,7 @@ type ChatIntent =
   | "pengeluaran"
   | "pemasukan"
   | "transaksi"
+  | "saran"
   | "lengkap";
 
 function analyzeIntent(message: string): {
@@ -626,6 +634,13 @@ function analyzeIntent(message: string): {
   // ── Transaksi BARU: cek setelah saldo ───────────────────────
   if (isLikelyTransaction(message)) {
     return { intent: "transaksi", timeRange: null }; // transaksi baru tidak pakai timeRange
+  }
+
+  // ── Saran / Analisis keuangan: deteksi SEBELUM pengeluaran/pemasukan ────
+  if (
+    /\b(saran|analisa|analisis|evaluasi|review keuangan|apakah saya boros|apakah aku boros|tips hemat|rekomendasi keuangan|bantu atur|cek kesehatan keuangan|gimana keuangan|bagaimana keuangan)\b/i.test(text)
+  ) {
+    return { intent: "saran", timeRange };
   }
 
   // ── Pemasukan (eksplisit, tidak campur pengeluaran) ─────────
@@ -702,6 +717,7 @@ Definisi Intent:
 - pengeluaran: menanyakan jumlah uang yang dihabiskan, belanjaan, biaya hidup, pengeluaran.
 - pemasukan: menanyakan gaji, bonus, komisi, uang masuk.
 - transaksi: berniat melakukan transaksi baru (misal: "catat makan 50k", "bayar listrik 100rb"), atau mengubah/menghapus transaksi lama.
+- saran: meminta analisis, evaluasi, review keuangan, tips hemat, rekomendasi, atau menanyakan "apakah saya boros", "gimana keuangan saya", "bantu atur keuangan".
 - lengkap: menanyakan ikhtisar keuangan umum, summary bulanan lengkap, atau gabungan saldo + pengeluaran.
 
 Pedoman Rentang Tanggal (Hitung secara relatif terhadap hari ini: ${todayStr}):
@@ -730,7 +746,7 @@ Format JSON:
     const res = await aiManager.chat([
       { role: "system", content: prompt },
       { role: "user", content: message }
-    ], { temperature: 0, maxTokens: 1000, jsonMode: true });
+    ], { temperature: 0, maxTokens: 150, jsonMode: true });
 
     const raw = res.content.trim();
     const cleanJson = raw
@@ -811,17 +827,18 @@ async function buildFinancialContext(
   // ─── Tentukan data yang dibutuhkan ──────────────────────
   const needFullContext = intent === "transaksi";
   const needExpense =
-    intent === "pengeluaran" || intent === "transaksi" || intent === "lengkap";
+    intent === "pengeluaran" || intent === "transaksi" || intent === "lengkap" || intent === "saran";
   const needIncome =
-    intent === "pemasukan" || intent === "transaksi" || intent === "lengkap"; // FIX: lengkap butuh income juga
+    intent === "pemasukan" || intent === "transaksi" || intent === "lengkap" || intent === "saran";
   const needCategories = needExpense || needFullContext;
 
-  // FIX: recentTx hanya untuk transaksi baru (referensi delete/edit),
-  // BUKAN untuk intent "lengkap" yang cuma query ringkasan
+  // FIX: recentTx hanya untuk transaksi baru (referensi delete/edit)
   const needRecentTx = needFullContext;
 
   // category breakdown: untuk query historis saja, bukan transaksi baru
   const needCatBreakdown = needExpense && !needFullContext;
+  // income breakdown: untuk pemasukan, saran, dan lengkap
+  const needIncCatBreakdown = (intent === "pemasukan" || intent === "saran" || intent === "lengkap") && !needFullContext;
 
   // ─── Bangun query plan ───────────────────────────────────────
   const queries: Promise<any>[] = [];
@@ -890,6 +907,42 @@ async function buildFinancialContext(
             userId,
             date: { gte: range.start, lte: range.end },
             type: "EXPENSE",
+          },
+          _sum: { amount: true },
+          orderBy: { _sum: { amount: "desc" } },
+          take: 8,
+        })
+      : Promise.resolve([]),
+  );
+
+  // Daily breakdown: pengeluaran per tanggal — agar AI bisa jawab "tanggal berapa paling besar"
+  // NOTE: TIDAK pakai groupBy("date") karena date field adalah DateTime (termasuk jam/menit/detik)
+  // sehingga setiap transaksi punya group sendiri. Solusi: fetch semua lalu group di JS.
+  keys.push("expByDate");
+  queries.push(
+    needCatBreakdown
+      ? prisma.transaction.findMany({
+          where: {
+            userId,
+            date: { gte: range.start, lte: range.end },
+            type: "EXPENSE",
+          },
+          select: { date: true, amount: true },
+          orderBy: { date: "asc" },
+        })
+      : Promise.resolve([]),
+  );
+
+  // Income by category: untuk intent pemasukan, saran, lengkap
+  keys.push("incByCat");
+  queries.push(
+    needIncCatBreakdown
+      ? prisma.transaction.groupBy({
+          by: ["categoryId"],
+          where: {
+            userId,
+            date: { gte: range.start, lte: range.end },
+            type: "INCOME",
           },
           _sum: { amount: true },
           orderBy: { _sum: { amount: "desc" } },
@@ -971,6 +1024,28 @@ async function buildFinancialContext(
   const avgDailyExpense = Math.round(expenseTotal / diffDays);
   const avgPerTx = expenseCount > 0 ? Math.round(expenseTotal / expenseCount) : 0;
 
+  // Format daily expense breakdown for AI context
+  // expByDate sekarang adalah array { date: Date, amount: number } — di-group di sini per tanggal kalender
+  function fmtDailyBreakdown(
+    rows: { date: Date; amount: number }[],
+  ): string {
+    if (!rows || rows.length === 0) return "";
+    // Group by YYYY-MM-DD (tanggal lokal)
+    const byDay: Record<string, number> = {};
+    for (const row of rows) {
+      const d = new Date(row.date);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      byDay[key] = (byDay[key] || 0) + row.amount;
+    }
+    // Urutkan dari terbesar
+    return Object.entries(byDay)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 31)
+      .filter(([, total]) => total > 0)
+      .map(([dateStr, total]) => `${dateStr}:Rp${total.toLocaleString("id-ID")}`)
+      .join("|");
+  }
+
   const dataParts: string[] = [];
   if (intent !== "non_finansial") {
     dataParts.push(`Total Saldo: Rp${totalBalance.toLocaleString("id-ID")}`);
@@ -982,13 +1057,20 @@ async function buildFinancialContext(
     let expStr = `Pengeluaran: ${expenseCount} tx | total Rp${expenseTotal.toLocaleString("id-ID")} | Rata-rata Harian: Rp${avgDailyExpense.toLocaleString("id-ID")}/hari | Rata-rata per Transaksi: Rp${avgPerTx.toLocaleString("id-ID")}`;
     const catStr = fmtCatBreakdown(d.expByCat);
     if (catStr) expStr += ` | per-kategori: ${catStr}`;
+    // Tambahkan breakdown per-tanggal agar AI bisa jawab "tanggal paling boros"
+    const dailyStr = fmtDailyBreakdown(d.expByDate);
+    if (dailyStr) expStr += ` | per-tanggal: ${dailyStr}`;
     dataParts.push(expStr);
   }
 
   if (needIncome && incomeTotal > 0) {
-    dataParts.push(
-      `Pemasukan: ${incomeCount} tx | total Rp${incomeTotal.toLocaleString("id-ID")}`,
+    let incStr = `Pemasukan: ${incomeCount} tx | total Rp${incomeTotal.toLocaleString("id-ID")}`;
+    // P5: Tambah breakdown per-kategori pemasukan
+    const incCatStr = fmtCatBreakdown(
+      (d.incByCat || []).map((g: any) => ({ categoryId: g.categoryId, _sum: g._sum }))
     );
+    if (incCatStr) incStr += ` | per-kategori: ${incCatStr}`;
+    dataParts.push(incStr);
   }
 
   if (needRecentTx && recentTx.length > 0) {
@@ -1048,9 +1130,16 @@ async function buildFinancialContext(
     }
   }
 
-  // ─── Action format (hanya saat transaksi) ───────────────
-  const expCatStr = DEFAULT_EXPENSE_CATS.join(",");
-  const incCatStr = DEFAULT_INCOME_CATS.join(",");
+  // ─── Action format (hanya saat transaksi) ─────────────────────────
+  // P6: Gunakan kategori user jika ada, fallback ke default list
+  const userExpCats = categories.filter(c => c.type === "EXPENSE").map(c => c.name);
+  const userIncCats = categories.filter(c => c.type === "INCOME").map(c => c.name);
+  const expCatStr = userExpCats.length > 0
+    ? userExpCats.join(",")               // kategori user (lebih pendek, lebih relevan)
+    : DEFAULT_EXPENSE_CATS.join(",");     // fallback default
+  const incCatStr = userIncCats.length > 0
+    ? userIncCats.join(",")
+    : DEFAULT_INCOME_CATS.join(",");
   let actionFormat = "";
 
   if (needFullContext) {
@@ -1121,6 +1210,9 @@ async function buildFinancialContext(
         `Aturan (periode: ${range.label}):\n` +
         "- Jawab pertanyaan pengeluaran HANYA dari DATA di bawah.\n" +
         "- Sebutkan total pengeluaran + breakdown per-kategori dengan - list.\n" +
+        "- Jika user bertanya tanggal/hari paling boros, jawab dari data per-tanggal.\n" +
+        // P4: instruksi saran/analisis
+        "- Jika user minta evaluasi, analisa, atau saran: berikan 2-3 rekomendasi konkret berbasis DATA.\n" +
         (wantsChart
           ? `- User minta grafik: akhiri dengan ${chartTag}.\n`
           : "") +
@@ -1140,8 +1232,32 @@ async function buildFinancialContext(
         "- JANGAN pakai list bertingkat. Paragraf maksimal 3 kalimat.\n\n" +
         `Aturan (periode: ${range.label}):\n` +
         "- Jawab pertanyaan pemasukan HANYA dari DATA di bawah.\n" +
-        "- Sebutkan total pemasukan.\n" +
+        // P5: instruksi breakdown kategori pemasukan
+        "- Sebutkan total pemasukan dan breakdown per-sumber jika ada.\n" +
         "- Nada: ramah, hangat.\n\n" +
+        dataSection;
+      break;
+
+    // P1: Case khusus saran/analisis keuangan
+    case "saran":
+      systemContent =
+        "Kamu: Catatin AI, asisten keuangan dan analis finansial pribadi.\n\n" +
+        "FORMAT:\n" +
+        "- Gunakan ### Heading untuk section, **bold** untuk angka dan poin penting.\n" +
+        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
+        "- Gunakan list bernomor urut (1., 2., 3., dst.) untuk rekomendasi, - list untuk rincian.\n" +
+        "- PENTING: Tulis nomor list dan teks di baris yang sama (contoh: '1. Batasi pengeluaran...'). JANGAN menuliskan nomor list di baris terpisah atau menggunakan angka 1. untuk semua item.\n" +
+        "- Paragraf maksimal 3 kalimat.\n\n" +
+        `Aturan (periode: ${range.label}):\n` +
+        "- WAJIB berikan analisis mendalam dari DATA di bawah — jangan hanya melaporkan angka.\n" +
+        "- Struktur jawaban: (1) Ringkasan kondisi keuangan, (2) Temuan penting dari data, (3) Rekomendasi konkret.\n" +
+        "- Evaluasi: bandingkan pemasukan vs pengeluaran, identifikasi kategori terbesar, hari paling boros.\n" +
+        "- Berikan 2-4 rekomendasi SPESIFIK berbasis DATA (bukan saran umum seperti 'hemat lebih banyak').\n" +
+        "- Jika ada per-tanggal: sebutkan hari paling boros.\n" +
+        "- Jika pengeluaran > pemasukan: nyatakan dengan tegas, beri saran darurat.\n" +
+        "- Jika tidak ada data: katakan jujur, minta user catat transaksi dulu.\n" +
+        "- Nada: profesional namun hangat, seperti konsultan keuangan yang peduli.\n" +
+        `- Akhiri dengan ${chartTag} jika ada data pengeluaran.\n\n` +
         dataSection;
       break;
 
@@ -1182,7 +1298,7 @@ async function buildFinancialContext(
         "- Jawab pertanyaan keuangan HANYA dari DATA di bawah.\n" +
         "- Sebutkan total pemasukan + pengeluaran + saldo.\n" +
         "- Breakdown per-kategori pengeluaran dengan - list (cukup sebut nama + nominal).\n" +
-        "- Jika user minta saran/masukan: gunakan list bernomor (1. 2. 3.) pendek, satu baris per poin.\n" +
+        "- Jika user minta saran/masukan: gunakan list bernomor urut (1., 2., 3., dst.) pendek, tulis nomor dan teks di baris yang sama (contoh: '1. Batasi pengeluaran...'). JANGAN menuliskan nomor list di baris terpisah atau menggunakan angka 1. untuk semua item.\n" +
         "- JANGAN beri saran kalau user tidak minta.\n" +
         "- Jika user tanya grafik: sertakan " +
         chartTag +
@@ -1546,7 +1662,17 @@ aiRoutes.post("/chat", async (c) => {
   }
 
   // ─── Deteksi intent + bangun system prompt ──────────────
-  let { intent, timeRange } = await extractIntentAndTemporal(message);
+  // P3: Gunakan regex dulu — skip LLM extractor jika sudah confident
+  // (hemat 1 LLM call untuk ~40% traffic: sapaan, saldo, transaksi jelas)
+  const regexResult = analyzeIntent(message);
+  const skipLLMExtractor =
+    txClass?.isTransaction === true ||                          // LLM classifier sudah tahu ini transaksi
+    regexResult.intent === "non_finansial" ||                   // Sapaan → tidak perlu tanggal
+    regexResult.intent === "saldo";                             // Saldo → tidak perlu tanggal
+
+  let { intent, timeRange } = skipLLMExtractor
+    ? regexResult
+    : await extractIntentAndTemporal(message);
 
   // Override intent jika LLM classifier mendeteksi transaksi (meski incomplete)
   if (txClass?.isTransaction) {

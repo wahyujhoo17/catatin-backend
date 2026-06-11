@@ -274,10 +274,10 @@ class AIProviderManager {
 
           // Rate limited — mark and skip
           if (err.status === 429) {
-            const retryAfter = parseInt(
-              err.headers?.["retry-after"] || "30",
-              10,
-            );
+            let retryAfter = parseInt(err.headers?.["retry-after"], 10);
+            if (isNaN(retryAfter) || retryAfter <= 0) {
+              retryAfter = 60; // default to 60s
+            }
             await this.markRateLimited(providerName, index, retryAfter);
             continue; // coba key lain
           }
@@ -399,10 +399,10 @@ class AIProviderManager {
           key.failures++;
 
           if (err.status === 429) {
-            const retryAfter = parseInt(
-              err.headers?.["retry-after"] || "30",
-              10,
-            );
+            let retryAfter = parseInt(err.headers?.["retry-after"], 10);
+            if (isNaN(retryAfter) || retryAfter <= 0) {
+              retryAfter = 60; // default to 60s
+            }
             await this.markRateLimited(providerName, index, retryAfter);
             continue;
           }

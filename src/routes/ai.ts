@@ -389,6 +389,11 @@ OUTPUT: HANYA JSON, tanpa markdown, tanpa \`\`\`, tanpa penjelasan.`;
       .replace(/\n?```\s*$/i, "")
       .trim();
 
+    if (!jsonStr) {
+      console.warn("[AI] Transaction classifier returned empty response");
+      return null;
+    }
+
     const parsed = JSON.parse(jsonStr);
 
     // Validasi & normalisasi
@@ -655,6 +660,10 @@ async function extractIntentAndTemporal(
   intent: ChatIntent;
   timeRange: TimeRange | null;
 }> {
+  if (!message || !message.trim()) {
+    return { intent: "non_finansial", timeRange: null };
+  }
+
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -710,6 +719,11 @@ Format JSON:
       .replace(/^```(?:json)?\s*\n?/i, "")
       .replace(/\n?```\s*$/i, "")
       .trim();
+
+    if (!cleanJson) {
+      console.warn("[AI] Intent LLM extractor returned empty response, falling back to regex.");
+      return analyzeIntent(message);
+    }
 
     const parsed = JSON.parse(cleanJson);
     if (!parsed || !parsed.intent) {

@@ -157,9 +157,9 @@ export const aiTools = [
           amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
           description: { type: "string", description: "Deskripsi transaksi" },
           category: { type: "string", description: "Kategori (contoh: Makanan, Gaji, dll)" },
-          accountId: { type: "string", description: "ID akun yang digunakan" }
+          accountId: { type: "string", description: "ID akun yang digunakan (JANGAN DIISI jika tidak ada dompet yang cocok di data RAHASIA)" }
         },
-        required: ["type", "amount", "description", "category", "accountId"]
+        required: ["type", "amount", "description", "category"]
       }
     }
   },
@@ -703,6 +703,11 @@ function analyzeIntent(message: string): {
   // Supaya "beli kopi 15k tadi" tidak salah ambil timeRange
   const timeRange = parseTemporal(message);
 
+  // ── Transaksi BARU: prioritas tertinggi setelah non-finansial ──────────
+  if (isLikelyTransaction(message)) {
+    return { intent: "transaksi", timeRange: null };
+  }
+
   // ── Saldo: tidak ada query pengeluaran/pemasukan ────────────
   const hasFinanceQuery =
     /\b(pengeluaran|expense|pemasukan|income|transaksi|belanja|boros|hemat|keluar|habis)\b/i.test(
@@ -719,11 +724,6 @@ function analyzeIntent(message: string): {
   // ── "Berapa uang saya" → saldo juga ─────────────────────────
   if (/\bberapa (uang|duit)\b/i.test(text) && !hasFinanceQuery) {
     return { intent: "saldo", timeRange: null };
-  }
-
-  // ── Transaksi BARU: cek setelah saldo ───────────────────────
-  if (isLikelyTransaction(message)) {
-    return { intent: "transaksi", timeRange: null }; // transaksi baru tidak pakai timeRange
   }
 
   // ── Saran / Analisis keuangan: deteksi SEBELUM pengeluaran/pemasukan ────
@@ -1236,10 +1236,10 @@ async function buildFinancialContext(
           `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
           `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
           `1. Cek apakah user MEMINTA transaksi baru di pesan terakhirmya.\n` +
-          `2. JIKA YA: Gunakan tool record_transaction atau transfer_balance sesuai permintaan.\n` +
-          `   PENTING: Gunakan ID akun yang sesuai dari RAHASIA di bawah, JANGAN mengarang ID.\n` +
-          `3. JIKA TIDAK ADA AKUN YANG COCOK: Tanya akun mana yang ingin digunakan.\n` +
-          `4. JANGAN gunakan tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).`;
+          `2. JIKA YA: Panggil tool record_transaction atau transfer_balance. Jika ada BANYAK transaksi, panggil tool BERKALI-KALI secara paralel.\n` +
+          `   PENTING: Gunakan ID akun yang persis sama dengan RAHASIA di bawah. JANGAN mengarang ID.\n` +
+          `3. JIKA AKUN TIDAK TERDAFTAR (contoh: user pakai 'Tunai' tapi tidak ada di daftar): JANGAN panggil tool apapun. Balas dengan teks meminta user memilih akun yang tersedia.\n` +
+          `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).`;
       }
     }
   }
@@ -2032,7 +2032,12 @@ aiRoutes.post("/chat", async (c) => {
 
       // Only pass tools if the user is actually intending to record a transaction
       // This prevents the AI from hallucinating tool calls when answering questions about history
-      const chatOptions = { vision: !!image, tools: intent === "transaksi" ? aiTools : undefined };
+      const hasTools = intent === "transaksi";
+      const chatOptions = { 
+        vision: !!image, 
+        tools: hasTools ? aiTools : undefined,
+        tool_choice: hasTools ? "auto" : undefined
+      };
       let finalToolCalls: any[] = [];
 
       // ─── Cek custom AI dari database ─────────────────────
@@ -2144,11 +2149,11 @@ aiRoutes.post("/chat", async (c) => {
             const amt = Number(tx.amount || 0).toLocaleString("id-ID");
             let msg = "";
             if (eventType === "transaction_created") {
-              msg = `✅ Transaksi tercatat: ${sign}Rp ${amt} — ${tx.description} (${tx.category}) ke ${tx.account}\n`;
+              msg = `✅ Transaksi tercatat: ${sign}Rp ${amt} — ${tx.description} (${tx.category}) ke ${tx.account}\n\n`;
             } else if (eventType === "transaction_updated") {
-              msg = `✅ Transaksi diubah: menjadi ${sign}Rp ${amt} — ${tx.description}\n`;
+              msg = `✅ Transaksi diubah: menjadi ${sign}Rp ${amt} — ${tx.description}\n\n`;
             } else if (eventType === "transaction_deleted") {
-              msg = `🗑️ Transaksi berhasil dihapus.\n`;
+              msg = `🗑️ Transaksi berhasil dihapus.\n\n`;
             }
 
             fullResponse += msg;

@@ -158,6 +158,28 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         continue;
       }
 
+      // --- add_subscription ---
+      if (actionType === "add_subscription") {
+        const { name, amount, cycle, nextDueDate } = parsed;
+        if (!name || typeof amount !== "number" || !cycle || !nextDueDate) continue;
+
+        const newSub = await prisma.subscription.create({
+          data: {
+            userId,
+            name,
+            amount,
+            cycle,
+            nextDueDate: new Date(nextDueDate),
+          }
+        });
+
+        processedEvents.push({
+          action: "add_subscription",
+          subscription: newSub
+        });
+        continue;
+      }
+
       // --- record_transaction & draft_transaction ---
       if (actionType === "record_transaction" || actionType === "draft_transaction") {
         const {
@@ -301,10 +323,18 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
 };
 
 // ─── Strip [ACTION] blocks from response ────────────────────
+export type TransactionActionType =
+  | "record_transaction"
+  | "update_transaction"
+  | "delete_transaction"
+  | "draft_transaction"
+  | "transfer_balance"
+  | "add_subscription";
+
 export function stripActions(content: string): string {
   // Since we use native function calling now, the content usually won't have [ACTION] blocks.
   // But we keep this for backward compatibility with old chat history just in case.
   return content
-    .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance)\][\s\S]*?\[\/ACTION\]/g, "")
+    .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription)\][\s\S]*?\[\/ACTION\]/g, "")
     .trim();
 }

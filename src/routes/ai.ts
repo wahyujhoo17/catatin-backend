@@ -183,6 +183,23 @@ export const aiTools = [
   {
     type: "function",
     function: {
+      name: "add_subscription",
+      description: "Catat jadwal langganan atau tagihan rutin (Netflix, Kos, BPJS, cicilan, dll)",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Nama langganan/tagihan (misal: 'Kos', 'Netflix')" },
+          amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
+          cycle: { type: "string", enum: ["MONTHLY", "YEARLY", "WEEKLY"], description: "Siklus tagihan (harian tidak didukung)" },
+          nextDueDate: { type: "string", description: "Tanggal jatuh tempo berikutnya (format: YYYY-MM-DD)" }
+        },
+        required: ["name", "amount", "cycle", "nextDueDate"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "update_transaction",
       description: "Ubah data transaksi yang sudah ada",
       parameters: {
@@ -252,6 +269,9 @@ function isLikelyTransaction(message: string): boolean {
     "habis",
     "keluar buat",
     "pakai buat",
+    "ingatkan",
+    "langganan",
+    "tagihan",
     // makan-minum
     "makan",
     "minum",
@@ -1235,11 +1255,12 @@ async function buildFinancialContext(
         accountRule =
           `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
           `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
-          `1. Cek apakah user MEMINTA transaksi baru di pesan terakhirmya.\n` +
-          `2. JIKA YA: Panggil tool record_transaction atau transfer_balance. Jika ada BANYAK transaksi, panggil tool BERKALI-KALI secara paralel.\n` +
+          `1. Cek apakah user MEMINTA transaksi baru di pesan terakhirmya ATAU meminta pengingat tagihan.\n` +
+          `2. JIKA YA: Panggil tool record_transaction, transfer_balance, atau add_subscription. Jika ada BANYAK aksi, panggil tool BERKALI-KALI secara paralel.\n` +
           `   PENTING: Gunakan ID akun yang persis sama dengan RAHASIA di bawah. JANGAN mengarang ID.\n` +
           `3. JIKA AKUN TIDAK TERDAFTAR (contoh: user pakai 'Tunai' tapi tidak ada di daftar): JANGAN panggil tool apapun. Balas dengan teks meminta user memilih akun yang tersedia.\n` +
-          `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).`;
+          `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
+          `5. Jika mencatat tagihan (add_subscription), asumsikan 'setiap tanggal X' berarti siklus MONTHLY dan hitung nextDueDate terdekat yang masuk akal.`;
       }
     }
   }
@@ -2116,7 +2137,7 @@ aiRoutes.post("/chat", async (c) => {
         // Fallback for old custom text action or custom providers without tool support
         // We handle this gracefully by wrapping string in fake tool call if needed or let legacy parse handle it
         // Note: processTransactionActions now expects toolCalls[], so we parse it if string fallback
-        const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance)\s*\]([\s\S]*?)\[\/ACTION\]/g;
+        const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription)\s*\]([\s\S]*?)\[\/ACTION\]/g;
         let match;
         const fallbackToolCalls = [];
         while ((match = actionRegex.exec(fullResponse)) !== null) {
@@ -2141,19 +2162,27 @@ aiRoutes.post("/chat", async (c) => {
           let eventType = "transaction_created";
           if (ev.action === "update") eventType = "transaction_updated";
           if (ev.action === "delete") eventType = "transaction_deleted";
+          if (ev.action === "add_subscription") eventType = "subscription_created";
 
           // We must generate the text so it renders in chat and saves to history.
           if (isAiResponseEmpty) {
-            const tx = ev.transaction;
-            const sign = tx.type === "INCOME" ? "+" : "-";
-            const amt = Number(tx.amount || 0).toLocaleString("id-ID");
             let msg = "";
             if (eventType === "transaction_created") {
+              const tx = ev.transaction;
+              const sign = tx.type === "INCOME" ? "+" : "-";
+              const amt = Number(tx.amount || 0).toLocaleString("id-ID");
               msg = `✅ Transaksi tercatat: ${sign}Rp ${amt} — ${tx.description} (${tx.category}) ke ${tx.account}\n\n`;
             } else if (eventType === "transaction_updated") {
+              const tx = ev.transaction;
+              const sign = tx.type === "INCOME" ? "+" : "-";
+              const amt = Number(tx.amount || 0).toLocaleString("id-ID");
               msg = `✅ Transaksi diubah: menjadi ${sign}Rp ${amt} — ${tx.description}\n\n`;
             } else if (eventType === "transaction_deleted") {
               msg = `🗑️ Transaksi berhasil dihapus.\n\n`;
+            } else if (eventType === "subscription_created") {
+              const sub = ev.subscription;
+              const amt = Number(sub.amount || 0).toLocaleString("id-ID");
+              msg = `📅 Pengingat tagihan dibuat: ${sub.name} (Rp ${amt}) siklus ${sub.cycle}, jatuh tempo berikutnya: ${sub.nextDueDate.toISOString().split("T")[0]}\n\n`;
             }
 
             fullResponse += msg;

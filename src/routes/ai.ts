@@ -2609,7 +2609,7 @@ aiRoutes.post("/tts", async (c) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error("[TTS] ElevenLabs Error:", response.status, errorText);
-      return c.json({ error: "Gagal menghasilkan audio dari ElevenLabs" }, response.status);
+      return c.json({ error: "Gagal menghasilkan audio dari ElevenLabs" }, response.status as any);
     }
 
     const audioBuffer = await response.arrayBuffer();

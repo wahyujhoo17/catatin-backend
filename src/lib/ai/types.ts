@@ -18,8 +18,11 @@ export type ProviderName = "deepseek" | "openrouter" | "groq" | "gemini" | "samb
 
 // ─── Chat Types ───────────────────────────────────────────────
 export interface ChatMessage {
-  role: "user" | "assistant" | "system";
-  content: string | ContentPart[];
+  role: "user" | "assistant" | "system" | "tool";
+  content: string | ContentPart[] | null;
+  name?: string;
+  tool_calls?: any[];
+  tool_call_id?: string;
 }
 
 export interface ContentPart {
@@ -33,19 +36,25 @@ export interface ChatOptions {
   maxTokens?: number;
   stream?: boolean;
   jsonMode?: boolean;
+  tools?: any[];
+  tool_choice?: any;
 }
 
 export interface AIStreamEvent {
-  type: "token" | "done" | "error" | "provider_switch" | "transaction_created";
+  type: "token" | "done" | "error" | "provider_switch" | "transaction_created" | "transaction_updated" | "transaction_deleted" | "tool_calls";
   content?: string;
   provider?: ProviderName;
   model?: string;
   error?: string;
+  tool_calls?: any[];
   transaction?: {
+    id?: string;
     type: string;
     amount: number;
     description: string;
     category: string;
+    accountId?: string | null;
+    account?: string;
   };
 }
 
@@ -54,6 +63,7 @@ export interface ChatResponse {
   provider: ProviderName;
   model: string;
   content: string;
+  tool_calls?: any[];
 }
 
 // ─── Environment helpers ──────────────────────────────────────

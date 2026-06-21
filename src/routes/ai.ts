@@ -143,6 +143,94 @@ interface FinancialContext {
   categories: { id: string; name: string; type: string }[];
 }
 
+// ─── Tools definition ─────────────────────────────
+export const aiTools = [
+  {
+    type: "function",
+    function: {
+      name: "record_transaction",
+      description: "Catat transaksi pengeluaran atau pemasukan baru",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["EXPENSE", "INCOME"] },
+          amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
+          description: { type: "string", description: "Deskripsi transaksi" },
+          category: { type: "string", description: "Kategori (contoh: Makanan, Gaji, dll)" },
+          accountId: { type: "string", description: "ID akun yang digunakan" }
+        },
+        required: ["type", "amount", "description", "category", "accountId"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "transfer_balance",
+      description: "Pindahkan uang/saldo dari satu dompet/akun ke dompet/akun lain",
+      parameters: {
+        type: "object",
+        properties: {
+          fromAccountId: { type: "string", description: "ID dompet/akun asal (sumber dana)" },
+          toAccountId: { type: "string", description: "ID dompet/akun tujuan (penerima dana)" },
+          amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
+          description: { type: "string", description: "Deskripsi transfer" }
+        },
+        required: ["fromAccountId", "toAccountId", "amount"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_transaction",
+      description: "Ubah data transaksi yang sudah ada",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "ID transaksi" },
+          amount: { type: "number" },
+          description: { type: "string" }
+        },
+        required: ["id", "amount", "description"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_transaction",
+      description: "Hapus transaksi",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "ID transaksi" }
+        },
+        required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "draft_transaction",
+      description: "Buat draft transaksi jika info belum lengkap",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["EXPENSE", "INCOME"] },
+          amount: { type: "number" },
+          description: { type: "string" },
+          category: { type: "string" },
+          accountId: { type: "string", description: "ID akun (opsional)" }
+        },
+        required: ["type", "amount", "description"]
+      }
+    }
+  }
+];
+
+
 function isLikelyTransaction(message: string): boolean {
   if (!message) return false;
   const text = message.toLowerCase();
@@ -340,7 +428,7 @@ async function classifyTransactionMessage(
   isTransaction: boolean;
   amount?: number;
   description?: string;
-  type?: "INCOME" | "EXPENSE";
+  type?: "INCOME" | "EXPENSE" | "TRANSFER";
   category?: string;
   accountId?: string;
   accountName?: string;
@@ -354,6 +442,7 @@ async function classifyTransactionMessage(
 ATURAN PENTING:
 - "gaji masuk 4 jt ke bca" → {"isTransaction":true,"amount":4000000,"description":"Gaji","type":"INCOME","category":"Gaji","accountName":"BCA"}
 - "makan siang 25rb" → {"isTransaction":true,"amount":25000,"description":"Makan siang","type":"EXPENSE","category":"Makanan","needsAccount":true}
+- "pindah saldo 50rb dari bca ke bri" → {"isTransaction":true,"amount":50000,"description":"Transfer saldo","type":"TRANSFER"}
 - "transfer 100k ke budi" → {"isTransaction":true,"amount":100000,"description":"Transfer ke Budi","type":"EXPENSE","category":"Transfer"}
 - "bayar listrik 200rb pake bca" → {"isTransaction":true,"amount":200000,"description":"Bayar Listrik","type":"EXPENSE","category":"Tagihan","accountName":"BCA"}
 - "supriadi bayar hutang 50rb" → {"isTransaction":true,"amount":50000,"description":"Supriadi Bayar Hutang","type":"INCOME","category":"Lainnya"}
@@ -368,7 +457,8 @@ KONVERSI AMOUNT:
 
 TYPE:
 - INCOME: gaji, terima, dapat, bonus, freelance, refund, hadiah, hutang dibayar, utang dibayar
-- EXPENSE: beli, bayar, makan, minum, transport, tagihan, transfer, jajan
+- EXPENSE: beli, bayar, makan, minum, transport, tagihan, jajan, transfer keluar (ke orang lain)
+- TRANSFER: pindah saldo, transfer antar rekening sendiri, mutasi antar dompet
 
 CATEGORY (pilih salah satu):
 - EXPENSE: Makanan, Minuman, Transportasi, Belanja, Hiburan, Tagihan, Kesehatan, Pendidikan, Pakaian, Rumah Tangga, Donasi, Langganan, Perjalanan, Transfer, Lainnya
@@ -1145,11 +1235,11 @@ async function buildFinancialContext(
         accountRule =
           `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
           `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
-          `1. Cek apakah user menyebut nama akun dari daftar di atas (ABAIKAN CASE, contoh "bca" = "BCA").\n` +
-          `2. JIKA ADA NAMA AKUN (dalam pesan ini ATAU riwayat chat): WAJIB keluarkan [ACTION:record_transaction] pakai ID akun tersebut.\n` +
-          `   PENTING: Jika pesan user HANYA berisi nama akun (contoh: "BCA"), itu artinya user MEMILIH akun tersebut untuk transaksi sebelumnya. Langsung catat dengan [ACTION].\n` +
-          `3. JIKA TIDAK ADA: JANGAN keluarkan [ACTION]. Tanya akun mana, akhiri dengan [ASK_ACCOUNT:${accOptions}]\n` +
-          `4. Default EXPENSE, kecuali kata kunci pemasukan (gaji, bonus, refund, masuk).`;
+          `1. Cek apakah user MEMINTA transaksi baru di pesan terakhirmya.\n` +
+          `2. JIKA YA: Gunakan tool record_transaction atau transfer_balance sesuai permintaan.\n` +
+          `   PENTING: Gunakan ID akun yang sesuai dari RAHASIA di bawah, JANGAN mengarang ID.\n` +
+          `3. JIKA TIDAK ADA AKUN YANG COCOK: Tanya akun mana yang ingin digunakan.\n` +
+          `4. JANGAN gunakan tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).`;
       }
     }
   }
@@ -1167,22 +1257,23 @@ async function buildFinancialContext(
   let actionFormat = "";
 
   if (needFullContext) {
-    actionFormat = "FORMAT AKSI:\n";
+    actionFormat = "AKSI TERSEDIA:\n";
+    actionFormat += "Gunakan Function/Tools Calling yang tersedia untuk:\n";
     if (draftMode) {
-      actionFormat +=
-        '1. Draft Transaksi (WAJIB ADA): [ACTION:draft_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan Siang Nasi Padang","category":"Makanan","accountId":"<id_atau_kosong>"}[/ACTION]\n' +
-        "- Tentukan mandiri. Jika struk ada info bank, otomatis pilih accountId.\n";
+      actionFormat += "- Membuat draft transaksi (draft_transaction).\n";
+      actionFormat += "- Tentukan category secara spesifik.\n";
+      actionFormat += "- Jika di struk ada petunjuk dompet/akun, otomatis isi accountId.\n";
     } else {
-      actionFormat +=
-        '1. Mencatat: [ACTION:record_transaction]{"type":"EXPENSE","amount":50000,"description":"Makan Siang Nasi Padang","category":"Makanan","accountId":"<id>"}[/ACTION]\n' +
-        '2. Menghapus: [ACTION:delete_transaction]{"id":"<id_transaksi_dari_data>"}[/ACTION]\n' +
-        '3. Mengubah: [ACTION:update_transaction]{"id":"<id>","amount":60000,"description":"Makan Malam di Restoran"}[/ACTION]\n';
+      actionFormat += "- Mencatat transaksi baru (record_transaction).\n";
+      actionFormat += "- Memindahkan uang antar dompet (transfer_balance).\n";
+      actionFormat += "- Mengubah transaksi (update_transaction).\n";
+      actionFormat += "- Menghapus transaksi (delete_transaction).\n";
     }
     actionFormat +=
-      "4. Grafik: Jika user tanya pengeluaran bulanan/mingguan, SELALU sertakan [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK] di akhir.\n" +
-      "- type: INCOME|EXPENSE | amount: angka | description: HARUS deskriptif lengkap.\n" +
-      `- category: HARUS spesifik. EXPENSE=[${expCatStr}] INCOME=[${incCatStr}].\n` +
-      "- accountId: WAJIB dari daftar RAHASIA. JANGAN bocorkan!\n\n" +
+      "TENTANG GRAFIK: Jika user minta chart/grafik/diagram, sisipkan [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK] di akhir pesan.\n" +
+      `- Kategori EXPENSE prioritas: [${expCatStr}]\n` +
+      `- Kategori INCOME prioritas: [${incCatStr}]\n` +
+      "- ID Akun (accountId) WAJIB dari daftar akun RAHASIA. Jangan ngarang ID!\n\n" +
       `${accountRule}\n\n`;
   }
 
@@ -1413,6 +1504,9 @@ async function callCustomProviderStream(
       if (typeof m.content === "string") {
         return { role: m.role, content: m.content };
       }
+      if (m.content === null) {
+        return { role: m.role, content: null, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id };
+      }
       return {
         role: m.role,
         content: m.content.map((part) => {
@@ -1500,6 +1594,9 @@ async function callCustomProviderSync(
       if (typeof m.content === "string") {
         return { role: m.role, content: m.content };
       }
+      if (m.content === null) {
+        return { role: m.role, content: null, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id };
+      }
       return {
         role: m.role,
         content: m.content.map((part) => {
@@ -1564,7 +1661,8 @@ aiRoutes.post("/chat", async (c) => {
     txClass?.isTransaction &&
     txClass.amount &&
     txClass.type &&
-    txClass.accountId
+    txClass.accountId &&
+    txClass.type !== "TRANSFER"
   ) {
     const matchedAccount = accounts.find((a) => a.id === txClass.accountId)!;
     console.log(
@@ -1589,7 +1687,7 @@ aiRoutes.post("/chat", async (c) => {
             data: {
               userId: user.userId,
               name: catName,
-              type: txClass.type!,
+              type: txClass.type as any,
             },
           });
           categoryId = newCat.id;
@@ -1599,7 +1697,7 @@ aiRoutes.post("/chat", async (c) => {
           const created = await tx.transaction.create({
             data: {
               userId: user.userId,
-              type: txClass.type!,
+              type: txClass.type as any,
               amount: txClass.amount!,
               description:
                 txClass.description ||
@@ -1787,7 +1885,7 @@ aiRoutes.post("/chat", async (c) => {
           lastUserMsg.content as string,
           accounts,
         );
-        if (lastClass?.isTransaction && lastClass.amount && lastClass.type) {
+        if (lastClass?.isTransaction && lastClass.amount && lastClass.type && lastClass.type !== "TRANSFER") {
           parsed = {
             amount: lastClass.amount,
             description: lastClass.description || "Transaksi",
@@ -1932,6 +2030,11 @@ aiRoutes.post("/chat", async (c) => {
       c.header("Cache-Control", "no-cache");
       c.header("Connection", "keep-alive");
 
+      // Only pass tools if the user is actually intending to record a transaction
+      // This prevents the AI from hallucinating tool calls when answering questions about history
+      const chatOptions = { vision: !!image, tools: intent === "transaksi" ? aiTools : undefined };
+      let finalToolCalls: any[] = [];
+
       // ─── Cek custom AI dari database ─────────────────────
       const customProvider = await getUserCustomProvider(user.userId);
 
@@ -1941,6 +2044,8 @@ aiRoutes.post("/chat", async (c) => {
           `[AI] Menggunakan custom AI: ${customProvider.provider}, model: ${customProvider.model || "default"}`,
         );
 
+        // TODO: callCustomProviderStream should pass tools if customProvider supports it.
+        // For now, custom providers might only support text actions, but assuming they support tools
         const generator = await callCustomProviderStream(
           messages,
           customProvider,
@@ -1960,7 +2065,7 @@ aiRoutes.post("/chat", async (c) => {
         }
       } else {
         // ─── Default: gunakan Catatin AI (.env) dengan failover ──
-        const generator = aiManager.chatStream(messages, { vision: !!image });
+        const generator = aiManager.chatStream(messages, chatOptions);
 
         for await (const event of generator) {
           const data = JSON.stringify(event);
@@ -1968,6 +2073,10 @@ aiRoutes.post("/chat", async (c) => {
 
           if (event.type === "token" && event.content) {
             fullResponse += event.content;
+          }
+          
+          if (event.type === "tool_calls" && event.tool_calls) {
+            finalToolCalls = event.tool_calls;
           }
 
           if (event.type === "error" || event.type === "done") {
@@ -1990,26 +2099,69 @@ aiRoutes.post("/chat", async (c) => {
       }
 
       // ─── Proses transaksi dari respons AI ─────────────
-      if (fullResponse.trim()) {
-        const createdTxs = await processTransactionActions(
-          fullResponse,
+      // Tool calls execution
+      let createdTxs: any[] = [];
+      if (finalToolCalls.length > 0) {
+        createdTxs = await processTransactionActions(
+          finalToolCalls,
           user.userId,
           accounts,
         );
-
-        // Kirim event transaksi tercatat ke frontend
-        if (createdTxs.length > 0) {
-          for (const ev of createdTxs) {
-            let eventType = "transaction_created";
-            if (ev.action === "update") eventType = "transaction_updated";
-            if (ev.action === "delete") eventType = "transaction_deleted";
-
-            await s.write(
-              `data: ${JSON.stringify({ type: eventType, transaction: ev.transaction })}\n\n`,
-            );
-          }
+      } else if (fullResponse.includes("[ACTION:")) {
+        // Fallback for old custom text action or custom providers without tool support
+        // We handle this gracefully by wrapping string in fake tool call if needed or let legacy parse handle it
+        // Note: processTransactionActions now expects toolCalls[], so we parse it if string fallback
+        const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance)\s*\]([\s\S]*?)\[\/ACTION\]/g;
+        let match;
+        const fallbackToolCalls = [];
+        while ((match = actionRegex.exec(fullResponse)) !== null) {
+          fallbackToolCalls.push({
+            function: {
+              name: match[1],
+              arguments: match[2].trim()
+            }
+          });
         }
+        if (fallbackToolCalls.length > 0) {
+           createdTxs = await processTransactionActions(fallbackToolCalls, user.userId, accounts);
+        }
+      }
 
+      // If AI only returned tool_calls, it means the text stream was empty.
+      const isAiResponseEmpty = !fullResponse.trim();
+
+      // Kirim event transaksi tercatat ke frontend
+      if (createdTxs.length > 0) {
+        for (const ev of createdTxs) {
+          let eventType = "transaction_created";
+          if (ev.action === "update") eventType = "transaction_updated";
+          if (ev.action === "delete") eventType = "transaction_deleted";
+
+          // We must generate the text so it renders in chat and saves to history.
+          if (isAiResponseEmpty) {
+            const tx = ev.transaction;
+            const sign = tx.type === "INCOME" ? "+" : "-";
+            const amt = Number(tx.amount || 0).toLocaleString("id-ID");
+            let msg = "";
+            if (eventType === "transaction_created") {
+              msg = `✅ Transaksi tercatat: ${sign}Rp ${amt} — ${tx.description} (${tx.category}) ke ${tx.account}\n`;
+            } else if (eventType === "transaction_updated") {
+              msg = `✅ Transaksi diubah: menjadi ${sign}Rp ${amt} — ${tx.description}\n`;
+            } else if (eventType === "transaction_deleted") {
+              msg = `🗑️ Transaksi berhasil dihapus.\n`;
+            }
+
+            fullResponse += msg;
+            await s.write(`data: ${JSON.stringify({ type: "token", content: msg })}\n\n`);
+          }
+
+          await s.write(
+            `data: ${JSON.stringify({ type: eventType, transaction: ev.transaction })}\n\n`,
+          );
+        }
+      }
+
+      if (fullResponse.trim()) {
         await saveChatHistory(fullResponse);
       }
 
@@ -2095,6 +2247,8 @@ aiRoutes.post("/chat/sync", async (c) => {
     // Cek custom AI dari database
     const customProvider = await getUserCustomProvider(user.userId);
     let content: string;
+    let toolCalls: any[] = [];
+    const chatOptions = { vision: false, tools: aiTools };
 
     if (image) {
       // ─── 2-Step Pipeline: Vision OCR -> Text Logic ───
@@ -2136,10 +2290,9 @@ aiRoutes.post("/chat/sync", async (c) => {
           customProvider,
         );
       } else {
-        const result = await aiManager.chat([systemPrompt, finalUserMessage], {
-          vision: false,
-        });
+        const result = await aiManager.chat([systemPrompt, finalUserMessage], { ...chatOptions, vision: false });
         content = result.content;
+        toolCalls = result.tool_calls || [];
       }
     } else {
       // ─── Normal 1-Step Pipeline (Hanya Teks) ───
@@ -2149,10 +2302,9 @@ aiRoutes.post("/chat/sync", async (c) => {
           customProvider,
         );
       } else {
-        const result = await aiManager.chat([systemPrompt, userMessage], {
-          vision: false,
-        });
+        const result = await aiManager.chat([systemPrompt, userMessage], { ...chatOptions, vision: false });
         content = result.content;
+        toolCalls = result.tool_calls || [];
       }
     }
 
@@ -2167,11 +2319,29 @@ aiRoutes.post("/chat/sync", async (c) => {
     }
 
     // ─── Parse & proses transaksi dari respons ────────────
-    const processedEvents = await processTransactionActions(
-      content,
-      user.userId,
-      accounts,
-    );
+    let processedEvents: any[] = [];
+    if (toolCalls.length > 0) {
+      processedEvents = await processTransactionActions(
+        toolCalls,
+        user.userId,
+        accounts,
+      );
+    } else if (content.includes("[ACTION:")) {
+      const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance)\s*\]([\s\S]*?)\[\/ACTION\]/g;
+      let match;
+      const fallbackToolCalls = [];
+      while ((match = actionRegex.exec(content)) !== null) {
+        fallbackToolCalls.push({
+          function: {
+            name: match[1],
+            arguments: match[2].trim()
+          }
+        });
+      }
+      if (fallbackToolCalls.length > 0) {
+         processedEvents = await processTransactionActions(fallbackToolCalls, user.userId, accounts);
+      }
+    }
 
     // Map output structure to maintain backward compatibility if needed by the frontend sync caller
     const createdTxs = processedEvents.map((e) => e.transaction);

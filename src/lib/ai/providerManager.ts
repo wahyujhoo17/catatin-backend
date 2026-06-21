@@ -48,7 +48,7 @@ const PROVIDER_DEFAULTS: Record<
 
 // ─── Tiered Cost Routing Configuration ─────────────────────
 // Tier 1: Free providers (will be shuffled dynamically to balance load)
-const TEXT_TIER_FREE: ProviderName[] = ["groq", "gemini", "sambanova", "openrouter", "cerebras"];
+const TEXT_TIER_FREE: ProviderName[] = ["groq", "sambanova", "openrouter", "cerebras"];
 const VISION_TIER_FREE: ProviderName[] = ["groq", "gemini", "openrouter"];
 
 // Tier 2: Paid fallback providers (only used if all Tier 1 providers fail/cooldown)
@@ -279,9 +279,12 @@ class AIProviderManager {
             max_tokens: options.maxTokens ?? 2048,
             stream: false,
             ...(options.jsonMode ? { response_format: { type: "json_object" } } : {}),
+            ...(options.tools ? { tools: options.tools } : {}),
+            ...(options.tool_choice ? { tool_choice: options.tool_choice } : {}),
           });
 
           const content = response.choices?.[0]?.message?.content || "";
+          const tool_calls = response.choices?.[0]?.message?.tool_calls;
           await this.trackUsage(providerName, index);
           key.failures = 0; // reset on success
 
@@ -292,6 +295,7 @@ class AIProviderManager {
             provider: providerName,
             model,
             content,
+            tool_calls,
           };
         } catch (err: any) {
           key.failures++;
@@ -388,24 +392,55 @@ class AIProviderManager {
             temperature: options.temperature ?? 0.7,
             max_tokens: options.maxTokens ?? 2048,
             stream: true,
+            ...(options.tools ? { tools: options.tools } : {}),
+            ...(options.tool_choice ? { tool_choice: options.tool_choice } : {}),
           });
 
           const taskType = options.vision ? "Vision OCR" : "Chat";
           console.log(`[AI] Streaming ${taskType} started via ${providerName} (${model})`);
 
           let fullContent = "";
+          let fullToolCalls: any[] = [];
 
           for await (const chunk of stream) {
-            const delta = chunk.choices?.[0]?.delta?.content;
+            const delta = chunk.choices?.[0]?.delta;
             if (delta) {
-              fullContent += delta;
-              yield {
-                type: "token",
-                content: delta,
-                provider: providerName,
-                model,
-              };
+              if (delta.content) {
+                fullContent += delta.content;
+                yield {
+                  type: "token",
+                  content: delta.content,
+                  provider: providerName,
+                  model,
+                };
+              }
+              if (delta.tool_calls) {
+                for (const toolCall of delta.tool_calls) {
+                  const idx = toolCall.index;
+                  if (!fullToolCalls[idx]) {
+                    fullToolCalls[idx] = {
+                      id: toolCall.id,
+                      type: toolCall.type,
+                      function: { name: toolCall.function?.name || "", arguments: "" }
+                    };
+                  }
+                  if (toolCall.function?.arguments) {
+                    fullToolCalls[idx].function.arguments += toolCall.function.arguments;
+                  }
+                }
+              }
             }
+          }
+
+          if (fullToolCalls.length > 0) {
+            // Clean up any empty slots just in case
+            fullToolCalls = fullToolCalls.filter(Boolean);
+            yield {
+              type: "tool_calls",
+              tool_calls: fullToolCalls,
+              provider: providerName,
+              model,
+            };
           }
 
           await this.trackUsage(providerName, index);

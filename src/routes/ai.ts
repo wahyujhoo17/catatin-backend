@@ -2569,6 +2569,150 @@ aiRoutes.delete("/chat/clear", async (c) => {
   }
 });
 
+// ─── POST /api/ai/stt (Speech-to-Text via ElevenLabs Scribe / Groq Whisper) ──
+aiRoutes.post("/stt", async (c) => {
+  const { userId } = c.get("user");
+
+  try {
+    const body = await c.req.parseBody();
+    const audioFile = body["file"] as File;
+
+    if (!audioFile) {
+      return c.json({ error: "File audio wajib diupload" }, 400);
+    }
+
+    // Validate file type
+    const allowedTypes = [
+      "audio/webm",
+      "audio/mp3",
+      "audio/wav",
+      "audio/m4a",
+      "audio/ogg",
+      "audio/mp4",
+      "audio/mpeg",
+      "audio/aac",
+      "audio/x-m4a",
+    ];
+    if (!allowedTypes.includes(audioFile.type) && !audioFile.name.match(/\.(webm|mp3|wav|m4a|ogg|aac)$/i)) {
+      return c.json({ error: `Format audio tidak didukung: ${audioFile.type}` }, 400);
+    }
+
+    // Limit file size (25MB max)
+    if (audioFile.size > 25 * 1024 * 1024) {
+      return c.json({ error: "Ukuran audio maksimal 25MB" }, 400);
+    }
+
+    // Get user config for API keys
+    const dbUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { customAiConfig: true },
+    });
+    const config: any = dbUser?.customAiConfig || {};
+
+    // ── 1) Try ElevenLabs Scribe first (if key available) ──
+    const elevenLabsKey = config.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY;
+    if (elevenLabsKey) {
+      try {
+        const formData = new FormData();
+        formData.append("file", audioFile, audioFile.name || "audio.webm");
+        formData.append("model_id", "scribe_v2");
+        formData.append("language_code", "ind"); // Indonesian (ISO 639-3)
+        formData.append("tag_audio_events", "false");
+        formData.append("diarize", "false");
+
+        const response = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+          method: "POST",
+          headers: { "xi-api-key": elevenLabsKey },
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const transcript = (data.text || "").trim();
+          if (transcript) {
+            return c.json({ text: transcript, provider: "elevenlabs" });
+          }
+        } else {
+          console.warn("[STT] ElevenLabs Scribe failed:", response.status, await response.text().catch(() => ""));
+        }
+      } catch (err) {
+        console.warn("[STT] ElevenLabs Scribe error, falling back:", err);
+      }
+    }
+
+    // ── 2) Fall back to Groq Whisper (free, fast) ──
+    const groqKeys = [
+      process.env.GROQ_KEY_1,
+      process.env.GROQ_KEY_2,
+      process.env.GROQ_KEY_3,
+    ].filter(Boolean) as string[];
+    if (groqKeys.length > 0) {
+      try {
+        const randomKey = groqKeys[Math.floor(Math.random() * groqKeys.length)];
+        const formData = new FormData();
+        formData.append("file", audioFile, audioFile.name || "audio.webm");
+        formData.append("model", "whisper-large-v3");
+        formData.append("language", "id");
+        formData.append("response_format", "json");
+
+        const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${randomKey}` },
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const transcript = (data.text || "").trim();
+          if (transcript) {
+            return c.json({ text: transcript, provider: "groq" });
+          }
+        } else {
+          console.warn("[STT] Groq Whisper failed:", response.status);
+        }
+      } catch (err) {
+        console.warn("[STT] Groq Whisper error, falling back:", err);
+      }
+    }
+
+    // ── 3) Fall back to OpenAI Whisper ──
+    const openaiKey =
+      config.enabled && config.apiKey && config.provider === "openai"
+        ? config.apiKey
+        : process.env.OPENAI_API_KEY;
+    if (openaiKey) {
+      try {
+        const formData = new FormData();
+        formData.append("file", audioFile, audioFile.name || "audio.webm");
+        formData.append("model", "whisper-1");
+        formData.append("language", "id");
+        formData.append("response_format", "json");
+
+        const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${openaiKey}` },
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const transcript = (data.text || "").trim();
+          if (transcript) {
+            return c.json({ text: transcript, provider: "openai" });
+          }
+        }
+      } catch (err) {
+        console.warn("[STT] OpenAI Whisper error:", err);
+      }
+    }
+
+    return c.json({ error: "Semua provider STT gagal. Coba lagi nanti." }, 500);
+  } catch (error: any) {
+    console.error("[STT] Error:", error);
+    return c.json({ error: error.message || "Terjadi kesalahan saat transkripsi" }, 500);
+  }
+});
+
 // ─── POST /api/ai/tts (ElevenLabs Text-to-Speech) ───────────────
 aiRoutes.post("/tts", async (c) => {
   const { userId } = c.get("user");

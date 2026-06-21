@@ -44,6 +44,7 @@ dashboard.get("/summary", async (c) => {
       where: {
         userId,
         type: "INCOME",
+        isTransfer: false,
         date: { gte: startOfMonth, lte: endOfMonth },
       },
       _sum: { amount: true },
@@ -52,6 +53,7 @@ dashboard.get("/summary", async (c) => {
       where: {
         userId,
         type: "EXPENSE",
+        isTransfer: false,
         date: { gte: startOfMonth, lte: endOfMonth },
       },
       _sum: { amount: true },
@@ -96,6 +98,7 @@ dashboard.get("/summary", async (c) => {
     where: {
       userId,
       type: "EXPENSE",
+      isTransfer: false,
       date: { gte: startOfMonth, lte: endOfMonth },
     },
     _sum: { amount: true },
@@ -333,7 +336,8 @@ dashboard.get("/chart", async (c) => {
     where: {
       userId,
       date: { gte: startDate, lte: endDate },
-      type: { in: ["INCOME", "EXPENSE"] }
+      type: { in: ["INCOME", "EXPENSE"] },
+      isTransfer: false
     },
     orderBy: { date: "asc" },
     include: {

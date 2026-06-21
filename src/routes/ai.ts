@@ -1007,6 +1007,7 @@ async function buildFinancialContext(
             userId,
             date: { gte: range.start, lte: range.end },
             type: "EXPENSE",
+            isTransfer: false,
           },
           _sum: { amount: true },
           _count: true,
@@ -1023,6 +1024,7 @@ async function buildFinancialContext(
             userId,
             date: { gte: range.start, lte: range.end },
             type: "INCOME",
+            isTransfer: false,
           },
           _sum: { amount: true },
           _count: true, // FIX: tambah _count supaya bisa sebut "N pemasukan"
@@ -1040,6 +1042,7 @@ async function buildFinancialContext(
             userId,
             date: { gte: range.start, lte: range.end },
             type: "EXPENSE",
+            isTransfer: false,
           },
           _sum: { amount: true },
           orderBy: { _sum: { amount: "desc" } },

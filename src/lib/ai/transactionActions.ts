@@ -110,6 +110,7 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
               categoryId: catOutId,
               accountId: fromAccountId,
               source: "CHAT",
+              isTransfer: true,
               date: new Date(),
             }
           });
@@ -127,6 +128,7 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
               categoryId: catInId,
               accountId: toAccountId,
               source: "CHAT",
+              isTransfer: true,
               date: new Date(),
             }
           });

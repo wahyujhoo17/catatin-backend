@@ -120,6 +120,7 @@ model Transaction {
   method      String?         // cash, debit_card, credit_card, e_wallet
   source      String?         // CHAT, SCAN, MANUAL
   date        DateTime        @default(now())
+  isTransfer  Boolean         @default(false)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 

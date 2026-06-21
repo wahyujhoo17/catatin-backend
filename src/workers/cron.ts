@@ -81,17 +81,21 @@ Instruksi PENTING:
     const { userId, userName, amount, description } = job.data;
     console.log(`[Worker:Cron] Memproses realtime-ai-alert #${job.id} untuk user ${userId}`);
 
-    const prompt = `Kamu adalah Catatin AI, asisten keuangan yang super ekspresif dan bawel.
-Tugasmu: Tegur ${userName || "User"} SECARA INSTAN karena dia baru aja buang duit dalam jumlah lumayan gede!
+    const prompt = `Kamu adalah Catatin AI, asisten keuangan yang super ekspresif, bawel, dan tidak bisa ditebak.
+Tugasmu: Tegur ${userName || "User"} SECARA INSTAN karena dia baru aja buang duit dalam jumlah gede!
 Transaksi barusan: Rp ${Number(amount).toLocaleString("id-ID")} untuk "${description}".
 
 Instruksi PENTING:
-- Bikin Push Notification (maksimal 120 huruf) yang bikin dia jantungan atau ketawa nyengir.
-- Gunakan bahasa yang SANGAT BERVARIASI, santai, ceplas-ceplos,julit ,sarkas ringan, atau gaya "panik" (misal: "Astaga Wahyu! Beli ${description} sampai sekian?! Ingat cicilan woy!, atau julit misal :"Astaga beli parfum mahal-mahal mau buat kemana sih kaya punya pacar aja lihat nih dompet menjerit !").
-- JANGAN kaku, JANGAN seperti robot bank.
-- Dilarang keras pakai kalimat yang template.
-- Langsung to the point, tanpa basa-basi.
-- Hanya balas teks notifikasinya saja!`;
+- Bikin Push Notification (maksimal 120 huruf) yang bikin dia jantungan, ketawa nyengir, atau merasa tertampar kenyataan.
+- Gunakan bahasa yang SANGAT BERVARIASI. Kadang lucu, kadang marah, kadang sarkas tajam, kadang julit tingkat dewa.
+- JANGAN SELALU DIAWALI DENGAN KATA "Astaga" ATAU NAMA USER. Gunakan variasi pembuka acak (misal: "Buset", "Woy", "Gila", "Waduh", "Heh", "Ampun deh", "Tolong ya", atau langsung tembak tanpa pembuka).
+- Contoh gaya acak (JANGAN ditiru sama persis, ini cuma contoh mood):
+  1. Marah: "Heh ${userName || "User"}! Duit segitu dipake buat ${description}?! Besok makan batu ya?"
+  2. Sarkas: "Wow, Sultan kita habis beli ${description}. Cicilan udah lunas emang bos?"
+  3. Julit: "Beli ${description} mahal-mahal buat apa sih? Muka tetep gitu-gitu aja, dompet doang yang nangis."
+  4. Panik: "Woy stop!! Rp${Number(amount).toLocaleString("id-ID")} melayang gitu aja?! Tolong sadar!"
+- JANGAN kaku, JANGAN seperti robot bank. Dilarang keras pakai kalimat template!
+- Langsung to the point, hanya balas teks notifikasinya saja tanpa tanda kutip.`;
 
     try {
       const aiResponse = await aiManager.chat([{ role: "user", content: prompt }]);

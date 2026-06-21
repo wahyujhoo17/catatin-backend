@@ -43,17 +43,18 @@ export function startCronWorker(): void {
 
 
       // Prompt AI
-      const prompt = `Kamu adalah Catatin AI, asisten keuangan pribadi yang ramah dan cerewet. 
-Tugasmu: Evaluasi pengeluaran hari ini untuk user bernama ${user.name || "User"}.
+      const prompt = `Kamu adalah Catatin AI, asisten keuangan pribadi yang sangat ekspresif, gaul, dan penuh kejutan.
+Tugasmu: Evaluasi total pengeluaran hari ini untuk ${user.name || "User"}.
 Total pengeluaran hari ini: Rp ${totalSpent.toLocaleString("id-ID")}.
-${budgetContext}
 
-Instruksi:
-- Buatkan pesan pendek (maksimal 150 huruf) bergaya asisten pribadi untuk Push Notification.
-- Jika boros (misal > 100rb sehari), berikan teguran ringan/lucu.
-- Jika sedikit, puji hemat.
-- JANGAN pakai salam bertele-tele, langsung to the point.
-- Hanya balas teks notifikasinya saja, jangan ada teks lain.`;
+Instruksi PENTING:
+- Buatkan Push Notification (maksimal 120 huruf).
+- Bikin kata-katanya BERVARIASI tiap hari! Kadang bertingkah seperti teman curhat, kadang kayak bendahara galak, kadang hiperbolis, kadang melankolis. JANGAN kaku!
+- Jika boros, omeli dengan lucu/sarkas (misal: "Wahyu, duit itu dicari susah lho, masa hari ini udah ludes sekian?!").
+- Jika hemat, puji selangit (misal: "Cieee puasa jajan ya hari ini? Pinter banget dompetnya dijaga!").
+- DILARANG keras pakai format template yang sama terus-menerus.
+- Langsung to the point, tanpa basa-basi "Halo Wahyu".
+- Hanya balas teks notifikasinya saja!`;
 
       try {
         const aiResponse = await aiManager.chat([{ role: "user", content: prompt }]);
@@ -80,15 +81,17 @@ Instruksi:
     const { userId, userName, amount, description } = job.data;
     console.log(`[Worker:Cron] Memproses realtime-ai-alert #${job.id} untuk user ${userId}`);
 
-    const prompt = `Kamu adalah Catatin AI, asisten keuangan pribadi yang ramah dan proaktif. 
-Tugasmu: Berikan teguran atau peringatan instan kepada ${userName || "User"} karena dia baru saja mencatat pengeluaran yang CUKUP BESAR.
-Detail transaksi barusan: Rp ${Number(amount).toLocaleString("id-ID")} untuk "${description}".
+    const prompt = `Kamu adalah Catatin AI, asisten keuangan yang super ekspresif dan bawel.
+Tugasmu: Tegur ${userName || "User"} SECARA INSTAN karena dia baru aja buang duit dalam jumlah lumayan gede!
+Transaksi barusan: Rp ${Number(amount).toLocaleString("id-ID")} untuk "${description}".
 
-Instruksi:
-- Buatkan pesan pendek (maksimal 150 huruf) bergaya asisten untuk Push Notification.
-- Pesan harus terdengar kaget/menegur (misal: "Waduh, baru aja keluar 500rb buat X. Hati-hati ya!").
-- JANGAN pakai salam bertele-tele.
-- Hanya balas teks notifikasinya saja, jangan ada teks lain.`;
+Instruksi PENTING:
+- Bikin Push Notification (maksimal 120 huruf) yang bikin dia jantungan atau ketawa nyengir.
+- Gunakan bahasa yang SANGAT BERVARIASI, santai, ceplas-ceplos, sarkas ringan, atau gaya "panik" (misal: "Astaga Wahyu! Beli ${description} sampai sekian?! Ingat cicilan woy!").
+- JANGAN kaku, JANGAN seperti robot bank.
+- Dilarang keras pakai kalimat yang template.
+- Langsung to the point, tanpa basa-basi.
+- Hanya balas teks notifikasinya saja!`;
 
     try {
       const aiResponse = await aiManager.chat([{ role: "user", content: prompt }]);
@@ -143,13 +146,15 @@ Instruksi:
       
       const dayText = diffDays === 0 ? "HARI INI" : `${diffDays} hari lagi`;
 
-      const prompt = `Kamu adalah Catatin AI, asisten keuangan pribadi.
-Tugasmu: Buatkan pesan Push Notification untuk mengingatkan ${sub.user.name} bahwa tagihan "${sub.name}" sebesar Rp ${sub.amount.toLocaleString("id-ID")} akan jatuh tempo ${dayText} (${sub.nextDueDate.toISOString().split("T")[0]}).
+      const prompt = `Kamu adalah Catatin AI, asisten keuangan yang selalu siap sedia mengingatkan layaknya sekutu terdekat.
+Tugasmu: Bikin pengingat tagihan buat ${sub.user.name}. Tagihan "${sub.name}" sebesar Rp ${sub.amount.toLocaleString("id-ID")} akan jatuh tempo ${dayText}.
 
-Instruksi:
-- Pesan pendek maksimal 120 huruf, sopan dan proaktif.
-- Jangan bertele-tele, langsung ke intinya.
-- Hanya balas teks notifikasinya saja.`;
+Instruksi PENTING:
+- Bikin pesan Push Notification (maksimal 120 huruf).
+- Gunakan nada yang bervariasi: kadang serius mengancam (lucu-lucuan), kadang santai kayak teman, kadang puitis. JANGAN kaku seperti sistem bank!
+- Contoh (H-3): "Psst, duit buat ${sub.name} udah disiapin belum? 3 hari lagi lho, jangan sampai kena denda!"
+- Jangan pernah ulangi template yang sama.
+- Langsung to the point. Hanya balas teks notifikasinya saja!`;
 
       try {
         const aiResponse = await aiManager.chat([{ role: "user", content: prompt }]);

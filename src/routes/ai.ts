@@ -4,6 +4,7 @@ import prisma from "../lib/prisma";
 import redis, { clearUserAiCache } from "../lib/redis";
 import { authMiddleware } from "../middleware/auth";
 import { aiManager } from "../lib/ai/providerManager";
+import { cronQueue } from "../lib/queue";
 import type { ChatMessage } from "../lib/ai/types";
 import {
   processTransactionActions,
@@ -190,7 +191,7 @@ export const aiTools = [
         properties: {
           name: { type: "string", description: "Nama langganan/tagihan (misal: 'Kos', 'Netflix')" },
           amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
-          cycle: { type: "string", enum: ["MONTHLY", "YEARLY", "WEEKLY"], description: "Siklus tagihan (harian tidak didukung)" },
+          cycle: { type: "string", enum: ["MONTHLY", "YEARLY", "WEEKLY", "QUARTERLY", "SEMI_ANNUALLY"], description: "Siklus tagihan. QUARTERLY=3 bulan, SEMI_ANNUALLY=6 bulan." },
           nextDueDate: { type: "string", description: "Tanggal jatuh tempo berikutnya (format: YYYY-MM-DD)" }
         },
         required: ["name", "amount", "cycle", "nextDueDate"]
@@ -224,6 +225,20 @@ export const aiTools = [
           id: { type: "string", description: "ID transaksi" }
         },
         required: ["id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_alert_threshold",
+      description: "Ubah batas nominal untuk peringatan pengeluaran besar (Real-time AI Alert)",
+      parameters: {
+        type: "object",
+        properties: {
+          threshold: { type: "number", description: "Batas nominal pengeluaran (misal 100000 atau 1000000)" }
+        },
+        required: ["threshold"]
       }
     }
   },
@@ -272,6 +287,10 @@ function isLikelyTransaction(message: string): boolean {
     "ingatkan",
     "langganan",
     "tagihan",
+    "batas pengeluaran",
+    "peringatan",
+    "alert",
+    "threshold",
     // makan-minum
     "makan",
     "minum",
@@ -1260,7 +1279,8 @@ async function buildFinancialContext(
           `   PENTING: Gunakan ID akun yang persis sama dengan RAHASIA di bawah. JANGAN mengarang ID.\n` +
           `3. JIKA AKUN TIDAK TERDAFTAR (contoh: user pakai 'Tunai' tapi tidak ada di daftar): JANGAN panggil tool apapun. Balas dengan teks meminta user memilih akun yang tersedia.\n` +
           `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
-          `5. Jika mencatat tagihan (add_subscription), asumsikan 'setiap tanggal X' berarti siklus MONTHLY dan hitung nextDueDate terdekat yang masuk akal.`;
+          `5. Jika mencatat tagihan (add_subscription), pilih cycle yang tepat (SEMI_ANNUALLY untuk 6 bulan, QUARTERLY untuk 3 bulan) dan hitung nextDueDate terdekat yang masuk akal.\n` +
+          `6. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.`;
       }
     }
   }
@@ -1740,6 +1760,22 @@ aiRoutes.post("/chat", async (c) => {
           return created;
         });
 
+        // Trigger real-time alert jika pengeluaran > threshold
+        if (String(txClass.type).toUpperCase() === "EXPENSE") {
+          const userObj = await prisma.user.findUnique({ where: { id: user.userId }, select: { name: true, customAiConfig: true } });
+          const config = userObj?.customAiConfig as any;
+          const threshold = config?.alertThreshold ?? 500000;
+          
+          if (txClass.amount! >= threshold) {
+            await cronQueue.add("realtime-ai-alert", {
+              userId: user.userId,
+              userName: userObj?.name || "User",
+              amount: txClass.amount!,
+              description: txClass.description || "Pengeluaran"
+            });
+          }
+        }
+
         try {
           await clearUserAiCache(user.userId);
         } catch (err) {
@@ -2137,7 +2173,7 @@ aiRoutes.post("/chat", async (c) => {
         // Fallback for old custom text action or custom providers without tool support
         // We handle this gracefully by wrapping string in fake tool call if needed or let legacy parse handle it
         // Note: processTransactionActions now expects toolCalls[], so we parse it if string fallback
-        const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription)\s*\]([\s\S]*?)\[\/ACTION\]/g;
+        const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription|set_alert_threshold)\s*\]([\s\S]*?)\[\/ACTION\]/g;
         let match;
         const fallbackToolCalls = [];
         while ((match = actionRegex.exec(fullResponse)) !== null) {
@@ -2163,6 +2199,7 @@ aiRoutes.post("/chat", async (c) => {
           if (ev.action === "update") eventType = "transaction_updated";
           if (ev.action === "delete") eventType = "transaction_deleted";
           if (ev.action === "add_subscription") eventType = "subscription_created";
+          if (ev.action === "set_alert_threshold") eventType = "threshold_updated";
 
           // We must generate the text so it renders in chat and saves to history.
           if (isAiResponseEmpty) {
@@ -2183,6 +2220,9 @@ aiRoutes.post("/chat", async (c) => {
               const sub = ev.subscription;
               const amt = Number(sub.amount || 0).toLocaleString("id-ID");
               msg = `📅 Pengingat tagihan dibuat: ${sub.name} (Rp ${amt}) siklus ${sub.cycle}, jatuh tempo berikutnya: ${sub.nextDueDate.toISOString().split("T")[0]}\n\n`;
+            } else if (eventType === "threshold_updated") {
+              const threshold = Number(ev.threshold || 0).toLocaleString("id-ID");
+              msg = `⚙️ Batas peringatan pengeluaran besar berhasil diubah menjadi **Rp ${threshold}**.\n\n`;
             }
 
             fullResponse += msg;

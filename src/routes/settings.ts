@@ -17,6 +17,7 @@ interface CustomAiConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  alertThreshold?: number;
 }
 
 const DEFAULT_CONFIG: CustomAiConfig = {
@@ -25,6 +26,7 @@ const DEFAULT_CONFIG: CustomAiConfig = {
   baseUrl: "",
   apiKey: "",
   model: "",
+  alertThreshold: 500000,
 };
 
 // ─── GET /api/settings/ai-config ─────────────────────────────

@@ -180,6 +180,27 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         continue;
       }
 
+      // --- set_alert_threshold ---
+      if (actionType === "set_alert_threshold") {
+        const { threshold } = parsed;
+        if (typeof threshold !== "number") continue;
+
+        const userObj = await prisma.user.findUnique({ where: { id: userId }, select: { customAiConfig: true } });
+        const config = (userObj?.customAiConfig as any) || { enabled: false, provider: "openai", baseUrl: "", apiKey: "", model: "" };
+        config.alertThreshold = threshold;
+
+        await prisma.user.update({
+          where: { id: userId },
+          data: { customAiConfig: config }
+        });
+
+        processedEvents.push({
+          action: "set_alert_threshold",
+          threshold
+        });
+        continue;
+      }
+
       // --- record_transaction & draft_transaction ---
       if (actionType === "record_transaction" || actionType === "draft_transaction") {
         const {
@@ -283,15 +304,20 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           return created;
         });
 
-        // Trigger real-time alert jika pengeluaran > 500rb
-        if (type === "EXPENSE" && amount >= 500000) {
-          const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
-          cronQueue.add("realtime-ai-alert", {
-            userId,
-            userName: user?.name || "User",
-            amount,
-            description
-          });
+        // Trigger real-time alert jika pengeluaran > threshold
+        if (String(type).toUpperCase() === "EXPENSE") {
+          const userObj = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, customAiConfig: true } });
+          const config = userObj?.customAiConfig as any;
+          const threshold = config?.alertThreshold ?? 500000;
+
+          if (amount >= threshold) {
+            await cronQueue.add("realtime-ai-alert", {
+              userId,
+              userName: userObj?.name || "User",
+              amount,
+              description
+            });
+          }
         }
 
         processedEvents.push({
@@ -329,12 +355,13 @@ export type TransactionActionType =
   | "delete_transaction"
   | "draft_transaction"
   | "transfer_balance"
-  | "add_subscription";
+  | "add_subscription"
+  | "set_alert_threshold";
 
 export function stripActions(content: string): string {
   // Since we use native function calling now, the content usually won't have [ACTION] blocks.
   // But we keep this for backward compatibility with old chat history just in case.
   return content
-    .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription)\][\s\S]*?\[\/ACTION\]/g, "")
+    .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription|set_alert_threshold)\][\s\S]*?\[\/ACTION\]/g, "")
     .trim();
 }

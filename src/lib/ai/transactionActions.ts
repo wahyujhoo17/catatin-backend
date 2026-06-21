@@ -1,5 +1,6 @@
 import prisma from "../prisma";
 import { clearUserAiCache } from "../redis";
+import { cronQueue } from "../queue";
 
 export const processTransactionActions = async (toolCalls: any[], userId: string, accounts: any[]) => {
   const processedEvents: any[] = [];
@@ -259,6 +260,17 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           }
           return created;
         });
+
+        // Trigger real-time alert jika pengeluaran > 500rb
+        if (type === "EXPENSE" && amount >= 500000) {
+          const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+          cronQueue.add("realtime-ai-alert", {
+            userId,
+            userName: user?.name || "User",
+            amount,
+            description
+          });
+        }
 
         processedEvents.push({
           action: "record",

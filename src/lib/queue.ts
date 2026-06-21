@@ -31,6 +31,7 @@ function createQueue(name: string): Bull.Queue {
 export const emailQueue = createQueue("email");
 export const whatsappQueue = createQueue("whatsapp");
 export const notificationQueue = createQueue("notification");
+export const cronQueue = createQueue("cron");
 
 // ─── Graceful shutdown ────────────────────────────────────────
 export async function closeQueues(): Promise<void> {
@@ -38,5 +39,6 @@ export async function closeQueues(): Promise<void> {
     emailQueue.close(),
     whatsappQueue.close(),
     notificationQueue.close(),
+    cronQueue.close(),
   ]);
 }

@@ -337,6 +337,10 @@ function isLikelyTransaction(message: string): boolean {
 
   const hasActionVerb = actionVerbs.some((kw) => text.includes(kw));
   const isQuery = queryKeywords.some((kw) => text.includes(kw));
+  const isSettings = /\b(batas pengeluaran|peringatan|alert|threshold)\b/.test(text);
+
+  // Jika ini permintaan pengaturan batas pengeluaran, abaikan isQuery (karena ada kata "pengeluaran")
+  if (isSettings && hasAmount) return true;
 
   // Transaksi baru = ada amount + ada kata kerja aksi + BUKAN query
   return hasAmount && hasActionVerb && !isQuery;
@@ -1255,36 +1259,30 @@ async function buildFinancialContext(
   let accountRule = "";
   if (needFullContext) {
     if (accounts.length === 0) {
-      accountRule =
-        "⚠️ Belum ada akun. JANGAN catat transaksi. Suruh user tambah akun dulu.";
+      accountRule = "⚠️ Belum ada akun. JANGAN catat transaksi. Suruh user tambah akun dulu.\n";
     } else if (accounts.length === 1) {
-      accountRule =
-        "✅ 1 akun: " +
-        accounts[0].name +
-        '. Auto-pakai accountId="' +
-        accounts[0].id +
-        '" untuk semua transaksi.';
+      accountRule = "✅ 1 akun: " + accounts[0].name + '. Auto-pakai accountId="' + accounts[0].id + '" untuk semua transaksi.\n';
     } else {
       const accOptions = accounts.map((a) => a.name).join(",");
+      accountRule = `📋 ${accounts.length} akun tersedia: ${accOptions}.\n`;
       if (draftMode) {
-        accountRule =
-          `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
-          `ATURAN DRAFT:\n` +
+        accountRule += `ATURAN DRAFT:\n` +
           `1. WAJIB SELALU keluarkan blok [ACTION:draft_transaction] di akhir pesan.\n` +
-          `2. Cek apakah di struk ada petunjuk dompet/akun dari daftar (abaikan huruf besar/kecil). Jika ada, otomatis isi accountId-nya.\n` +
-          `3. JIKA di struk TIDAK ADA petunjuk dompet/akun sama sekali, kosongkan accountId ("") DAN tambahkan: [ASK_ACCOUNT:${accOptions}]`;
-      } else {
-        accountRule =
-          `📋 ${accounts.length} akun tersedia: ${accOptions}.\n` +
-          `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
-          `1. Cek apakah user MEMINTA transaksi baru di pesan terakhirmya ATAU meminta pengingat tagihan.\n` +
-          `2. JIKA YA: Panggil tool record_transaction, transfer_balance, atau add_subscription. Jika ada BANYAK aksi, panggil tool BERKALI-KALI secara paralel.\n` +
-          `   PENTING: Gunakan ID akun yang persis sama dengan RAHASIA di bawah. JANGAN mengarang ID.\n` +
-          `3. JIKA AKUN TIDAK TERDAFTAR (contoh: user pakai 'Tunai' tapi tidak ada di daftar): JANGAN panggil tool apapun. Balas dengan teks meminta user memilih akun yang tersedia.\n` +
-          `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
-          `5. Jika mencatat tagihan (add_subscription), pilih cycle yang tepat (SEMI_ANNUALLY untuk 6 bulan, QUARTERLY untuk 3 bulan) dan hitung nextDueDate terdekat yang masuk akal.\n` +
-          `6. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.`;
+          `2. Cek apakah di struk ada petunjuk dompet/akun dari daftar. Jika ada, otomatis isi accountId-nya.\n` +
+          `3. JIKA di struk TIDAK ADA petunjuk dompet/akun, kosongkan accountId ("") DAN tambahkan: [ASK_ACCOUNT:${accOptions}]\n`;
       }
+    }
+
+    if (accounts.length > 0 && !draftMode) {
+      accountRule +=
+        `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
+        `1. Cek apakah user MEMINTA transaksi baru di pesan terakhirmya ATAU meminta pengingat tagihan.\n` +
+        `2. JIKA YA: Panggil tool record_transaction, transfer_balance, atau add_subscription. Jika ada BANYAK aksi, panggil tool BERKALI-KALI secara paralel.\n` +
+        `   PENTING: Gunakan ID akun yang persis sama dengan RAHASIA di bawah. JANGAN mengarang ID.\n` +
+        `3. JIKA AKUN TIDAK TERDAFTAR (contoh: user pakai 'Tunai' tapi tidak ada di daftar): JANGAN panggil tool apapun. Balas dengan teks meminta user memilih akun yang tersedia.\n` +
+        `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
+        `5. Jika mencatat tagihan (add_subscription), pilih cycle yang tepat dan hitung nextDueDate terdekat yang masuk akal.\n` +
+        `6. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.\n`;
     }
   }
 
@@ -2022,6 +2020,22 @@ aiRoutes.post("/chat", async (c) => {
               return created;
             });
 
+            // Trigger real-time alert jika pengeluaran > threshold
+            if (String(parsed.type).toUpperCase() === "EXPENSE") {
+              const userObj = await prisma.user.findUnique({ where: { id: user.userId }, select: { name: true, customAiConfig: true } });
+              const config = userObj?.customAiConfig as any;
+              const threshold = config?.alertThreshold ?? 500000;
+
+              if (parsed.amount >= threshold) {
+                await cronQueue.add("realtime-ai-alert", {
+                  userId: user.userId,
+                  userName: userObj?.name || "User",
+                  amount: parsed.amount,
+                  description: parsed.description
+                });
+              }
+            }
+
             try {
               await clearUserAiCache(user.userId);
             } catch (err) {
@@ -2552,6 +2566,61 @@ aiRoutes.delete("/chat/clear", async (c) => {
       { error: err.message || "Failed to clear chat history" },
       500,
     );
+  }
+});
+
+// ─── POST /api/ai/tts (ElevenLabs Text-to-Speech) ───────────────
+aiRoutes.post("/tts", async (c) => {
+  const { userId } = c.get("user");
+  const { text, voiceId = "JBFqnCBsd6RMkjVDRZzb" } = await c.req.json(); // Default voice (George) or any valid ID
+
+  if (!text) return c.json({ error: "Teks wajib diisi" }, 400);
+
+  const dbUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { customAiConfig: true },
+  });
+
+  const config: any = dbUser?.customAiConfig || {};
+  const apiKey = config.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY;
+
+  if (!apiKey) {
+    return c.json({ error: "ElevenLabs API Key belum dikonfigurasi. Silakan isi di menu Pengaturan > Asisten AI." }, 400);
+  }
+
+  try {
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
+      method: "POST",
+      headers: {
+        "Accept": "audio/mpeg",
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text: text,
+        model_id: "eleven_multilingual_v2", // Multilingual v2 supports Indonesian!
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+        }
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[TTS] ElevenLabs Error:", response.status, errorText);
+      return c.json({ error: "Gagal menghasilkan audio dari ElevenLabs" }, response.status);
+    }
+
+    const audioBuffer = await response.arrayBuffer();
+
+    return c.body(audioBuffer, 200, {
+      "Content-Type": "audio/mpeg",
+      "Cache-Control": "public, max-age=31536000",
+    });
+  } catch (error: any) {
+    console.error("[TTS] Error generating speech:", error);
+    return c.json({ error: "Terjadi kesalahan internal saat generate audio" }, 500);
   }
 });
 

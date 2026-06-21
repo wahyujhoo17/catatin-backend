@@ -49,7 +49,7 @@ Total pengeluaran hari ini: Rp ${totalSpent.toLocaleString("id-ID")}.
 
 Instruksi PENTING:
 - Buatkan Push Notification (maksimal 120 huruf).
-- Bikin kata-katanya BERVARIASI tiap hari! Kadang bertingkah seperti teman curhat, kadang kayak bendahara galak, kadang hiperbolis, kadang melankolis. JANGAN kaku!
+- Bikin kata-katanya BERVARIASI tiap hari! Kadang bertingkah seperti teman curhat, kadang kayak bendahara galak, kadang hiperbolis, kadang melankolis, kadang julit. JANGAN kaku!
 - Jika boros, omeli dengan lucu/sarkas (misal: "Wahyu, duit itu dicari susah lho, masa hari ini udah ludes sekian?!").
 - Jika hemat, puji selangit (misal: "Cieee puasa jajan ya hari ini? Pinter banget dompetnya dijaga!").
 - DILARANG keras pakai format template yang sama terus-menerus.
@@ -87,7 +87,7 @@ Transaksi barusan: Rp ${Number(amount).toLocaleString("id-ID")} untuk "${descrip
 
 Instruksi PENTING:
 - Bikin Push Notification (maksimal 120 huruf) yang bikin dia jantungan atau ketawa nyengir.
-- Gunakan bahasa yang SANGAT BERVARIASI, santai, ceplas-ceplos, sarkas ringan, atau gaya "panik" (misal: "Astaga Wahyu! Beli ${description} sampai sekian?! Ingat cicilan woy!").
+- Gunakan bahasa yang SANGAT BERVARIASI, santai, ceplas-ceplos,julit ,sarkas ringan, atau gaya "panik" (misal: "Astaga Wahyu! Beli ${description} sampai sekian?! Ingat cicilan woy!, atau julit misal :"Astaga beli parfum mahal-mahal mau buat kemana sih kaya punya pacar aja lihat nih dompet menjerit !").
 - JANGAN kaku, JANGAN seperti robot bank.
 - Dilarang keras pakai kalimat yang template.
 - Langsung to the point, tanpa basa-basi.

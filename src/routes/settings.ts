@@ -18,6 +18,7 @@ interface CustomAiConfig {
   apiKey: string;
   model: string;
   alertThreshold?: number;
+  elevenLabsApiKey?: string;
 }
 
 const DEFAULT_CONFIG: CustomAiConfig = {
@@ -48,7 +49,7 @@ settingsRoutes.patch("/ai-config", async (c) => {
   const user = c.get("user");
   const body = await c.req.json();
 
-  const { enabled, provider, baseUrl, apiKey, model } = body;
+  const { enabled, provider, baseUrl, apiKey, model, alertThreshold, elevenLabsApiKey } = body;
 
   // Validasi jika enabled
   if (enabled) {
@@ -60,12 +61,21 @@ settingsRoutes.patch("/ai-config", async (c) => {
     }
   }
 
+  // Preserve existing config to not overwrite unpassed fields like alertThreshold if it's undefined
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { customAiConfig: true },
+  });
+  const currentConfig = (dbUser?.customAiConfig as unknown as CustomAiConfig) || DEFAULT_CONFIG;
+
   const config: CustomAiConfig = {
     enabled: enabled === true,
     provider: provider || DEFAULT_CONFIG.provider,
     baseUrl: (baseUrl || "").trim(),
     apiKey: (apiKey || "").trim(),
     model: (model || "").trim(),
+    alertThreshold: alertThreshold !== undefined ? Number(alertThreshold) : currentConfig.alertThreshold,
+    elevenLabsApiKey: elevenLabsApiKey !== undefined ? (elevenLabsApiKey as string).trim() : currentConfig.elevenLabsApiKey,
   };
 
   await prisma.user.update({

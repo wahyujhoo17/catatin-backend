@@ -184,16 +184,18 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
 
       // --- set_alert_threshold ---
       if (actionType === "set_alert_threshold") {
-        const { threshold } = parsed;
-        if (typeof threshold !== "number") continue;
+        let { threshold } = parsed;
+        if (typeof threshold === "string") {
+          threshold = Number(threshold.replace(/\D/g, ""));
+        }
+        if (typeof threshold !== "number" || isNaN(threshold)) continue;
 
         const userObj = await prisma.user.findUnique({ where: { id: userId }, select: { customAiConfig: true } });
         const config = (userObj?.customAiConfig as any) || { enabled: false, provider: "openai", baseUrl: "", apiKey: "", model: "" };
-        config.alertThreshold = threshold;
-
+        
         await prisma.user.update({
           where: { id: userId },
-          data: { customAiConfig: config }
+          data: { customAiConfig: { ...config, alertThreshold: threshold } }
         });
 
         processedEvents.push({

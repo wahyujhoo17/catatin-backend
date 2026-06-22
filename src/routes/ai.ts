@@ -167,6 +167,24 @@ export const aiTools = [
   {
     type: "function",
     function: {
+      name: "draft_transaction",
+      description: "Buat DRAFT transaksi dari pemindaian struk (HANYA GUNAKAN SAAT DIMINTA DRAFT)",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["EXPENSE", "INCOME"] },
+          amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
+          description: { type: "string", description: "Deskripsi transaksi" },
+          category: { type: "string", description: "Kategori (contoh: Makanan, Gaji, dll)" },
+          accountId: { type: "string", description: "ID akun yang digunakan (kosongkan jika tidak ada petunjuk)" }
+        },
+        required: ["type", "amount", "description", "category"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "transfer_balance",
       description: "Pindahkan uang/saldo dari satu dompet/akun ke dompet/akun lain",
       parameters: {
@@ -1267,9 +1285,9 @@ async function buildFinancialContext(
       accountRule = `📋 ${accounts.length} akun tersedia: ${accOptions}.\n`;
       if (draftMode) {
         accountRule += `ATURAN DRAFT:\n` +
-          `1. WAJIB SELALU keluarkan blok [ACTION:draft_transaction] di akhir pesan.\n` +
+          `1. WAJIB SELALU panggil tool 'draft_transaction'. JANGAN panggil 'record_transaction'.\n` +
           `2. Cek apakah di struk ada petunjuk dompet/akun dari daftar. Jika ada, otomatis isi accountId-nya.\n` +
-          `3. JIKA di struk TIDAK ADA petunjuk dompet/akun, kosongkan accountId ("") DAN tambahkan: [ASK_ACCOUNT:${accOptions}]\n`;
+          `3. JIKA di struk TIDAK ADA petunjuk dompet/akun, kosongkan accountId ("") DAN tambahkan teks: [ASK_ACCOUNT:${accOptions}] di pesan kamu.\n`;
       }
     }
 

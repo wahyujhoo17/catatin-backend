@@ -2609,38 +2609,9 @@ aiRoutes.post("/stt", async (c) => {
     });
     const config: any = dbUser?.customAiConfig || {};
 
-    // ── 1) Try ElevenLabs Scribe first (if key available) ──
-    const elevenLabsKey = config.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY;
-    if (elevenLabsKey) {
-      try {
-        const formData = new FormData();
-        formData.append("file", audioFile, audioFile.name || "audio.webm");
-        formData.append("model_id", "scribe_v2");
-        formData.append("language_code", "ind"); // Indonesian (ISO 639-3)
-        formData.append("tag_audio_events", "false");
-        formData.append("diarize", "false");
-
-        const response = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
-          method: "POST",
-          headers: { "xi-api-key": elevenLabsKey },
-          body: formData,
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          const transcript = (data.text || "").trim();
-          if (transcript) {
-            return c.json({ text: transcript, provider: "elevenlabs" });
-          }
-        } else {
-          console.warn("[STT] ElevenLabs Scribe failed:", response.status, await response.text().catch(() => ""));
-        }
-      } catch (err) {
-        console.warn("[STT] ElevenLabs Scribe error, falling back:", err);
-      }
-    }
-
-    // ── 2) Fall back to Groq Whisper (free, fast) ──
+    // ── 1) Groq Whisper (Terbaik untuk Bahasa Indonesia & Gaul) ──
+    // ElevenLabs Scribe sering kesulitan dengan slang bahasa Indonesia, 
+    // jadi kita langsung tembak pakai Groq Whisper-Large-V3.
     const groqKeys = [
       process.env.GROQ_KEY_1,
       process.env.GROQ_KEY_2,

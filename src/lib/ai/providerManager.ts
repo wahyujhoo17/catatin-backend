@@ -500,8 +500,33 @@ class AIProviderManager {
     } else {
       yield {
         type: "error",
-        error: "Semua provider AI gagal merespons. Coba lagi nanti.",
+        error: "Server sedang sibuk (rate limit) atau semua provider error. Coba lagi dalam 1-2 menit.",
       };
+    }
+  }
+
+  // ─── Transcribe Audio (Whisper) ────────────────────────────────
+  async transcribeAudio(audioFile: File): Promise<string> {
+    const providerName = "groq";
+    const provider = this.providers.get(providerName);
+    if (!provider) throw new Error("Provider Groq tidak dikonfigurasi untuk transkripsi audio");
+
+    const available = await this.getAvailableKeys(provider);
+    if (available.length === 0) throw new Error("Tidak ada API key Groq yang tersedia");
+
+    const { key } = available[0];
+    const client = this.createClient(key.baseUrl, key.key);
+
+    try {
+      const response = await client.audio.transcriptions.create({
+        file: audioFile,
+        model: "whisper-large-v3",
+        language: "id"
+      });
+      return response.text;
+    } catch (err: any) {
+      console.error("[AI] Transcribe error:", err.message);
+      throw new Error(`Gagal menerjemahkan audio: ${err.message}`);
     }
   }
 }

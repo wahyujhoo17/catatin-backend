@@ -48,7 +48,7 @@ const PROVIDER_DEFAULTS: Record<
 
 // ─── Tiered Cost Routing Configuration ─────────────────────
 // Tier 1: Free providers (will be shuffled dynamically to balance load)
-const TEXT_TIER_FREE: ProviderName[] = ["groq", "sambanova", "openrouter", "cerebras"];
+const TEXT_TIER_FREE: ProviderName[] = ["sambanova", "openrouter", "cerebras"];
 const VISION_TIER_FREE: ProviderName[] = ["groq", "gemini", "openrouter"];
 
 // Tier 2: Paid fallback providers (only used if all Tier 1 providers fail/cooldown)

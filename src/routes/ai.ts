@@ -2664,6 +2664,35 @@ aiRoutes.post("/stt", async (c) => {
       }
     }
 
+    // ── 2) Fall back to ElevenLabs Scribe (Jika Groq Gagal) ──
+    const elevenLabsKey = config.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY;
+    if (elevenLabsKey) {
+      try {
+        const formData = new FormData();
+        formData.append("file", audioFile, audioFile.name || "audio.webm");
+        formData.append("model_id", "scribe_v1");
+        formData.append("language_code", "id");
+
+        const response = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+          method: "POST",
+          headers: { "xi-api-key": elevenLabsKey },
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const transcript = (data.text || "").trim();
+          if (transcript) {
+            return c.json({ text: transcript, provider: "elevenlabs" });
+          }
+        } else {
+          console.warn("[STT] ElevenLabs Scribe failed:", response.status);
+        }
+      } catch (err) {
+        console.warn("[STT] ElevenLabs Scribe error, falling back:", err);
+      }
+    }
+
     // ── 3) Fall back to OpenAI Whisper ──
     const openaiKey =
       config.enabled && config.apiKey && config.provider === "openai"

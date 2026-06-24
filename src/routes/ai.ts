@@ -263,6 +263,21 @@ export const aiTools = [
   {
     type: "function",
     function: {
+      name: "adjust_balance",
+      description: "Sesuaikan/atur ulang saldo dompet atau akun ke nominal tertentu. Gunakan saat user minta penyesuaian/koreksi saldo (bukan transaksi).",
+      parameters: {
+        type: "object",
+        properties: {
+          accountId: { type: "string", description: "ID akun/dompet yang saldonya disesuaikan (dari daftar RAHASIA)" },
+          newBalance: { type: "number", description: "Nominal saldo baru (angka tanpa titik/koma)" }
+        },
+        required: ["accountId", "newBalance"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "draft_transaction",
       description: "Buat draft transaksi jika info belum lengkap",
       parameters: {
@@ -362,6 +377,15 @@ function isLikelyTransaction(message: string): boolean {
 
   // Transaksi baru = ada amount + ada kata kerja aksi + BUKAN query
   return hasAmount && hasActionVerb && !isQuery;
+}
+
+// ─── Detect balance adjustment requests ───────────────────
+// "sesuaikan saldo bri jadi 500rb", "atur ulang saldo bca 2jt", etc.
+function isBalanceAdjustmentRequest(message: string): boolean {
+  const text = message.toLowerCase();
+  const hasAdjustKeyword = /\b(sesuaikan|penyesuaian|koreksi|atur ulang|set saldo|ubah saldo|atur saldo|update saldo)\b/i.test(text);
+  const hasSaldoKeyword = /\b(saldo|balance)\b/i.test(text);
+  return hasAdjustKeyword && hasSaldoKeyword;
 }
 
 // ─── Parse transaction details from a message like "makan malam 45 rb" ──
@@ -1302,11 +1326,12 @@ async function buildFinancialContext(
       const accOptions = accounts.map((a) => a.name).join(",");
       accountRule = `📋 ${accounts.length} akun tersedia: ${accOptions}.\n`;
       if (draftMode) {
-        accountRule += `ATURAN DRAFT:\n` +
-          `1. WAJIB tuliskan ringkasan analisis struk (Jenis, Deskripsi, Kategori, Nominal) pada pesan teks sebelum memanggil tool.\n` +
+        accountRule += `ATURAN DRAFT (WAJIB DIPATUHIN):\n` +
+          `1. WAJIB tuliskan ringkasan dalam format: "### Ringkasan Struk\\n- Jenis: ...\\n- Deskripsi: ...\\n- Kategori: ...\\n- Nominal: Rp ..." sebelum memanggil tool.\n` +
           `2. WAJIB SELALU panggil tool 'draft_transaction'. JANGAN panggil 'record_transaction'.\n` +
-          `3. Cek apakah di struk ada petunjuk dompet/akun dari daftar. Jika ada, otomatis isi accountId-nya.\n` +
-          `4. JIKA di struk TIDAK ADA petunjuk dompet/akun, kosongkan accountId ("") DAN tambahkan teks: [ASK_ACCOUNT:${accOptions}] di pesan kamu.\n`;
+          `3. AKUN: HANYA isi accountId jika di struk JELAS tertera nama bank/dompet yang COCOK dengan daftar akun.\n` +
+          `4. JIKA RAGU atau TIDAK ADA petunjuk dompet di struk: WAJIB kosongkan accountId ("") DAN tambahkan [ASK_ACCOUNT:${accOptions}] di pesan.\n` +
+          `5. JANGAN PERNAH menebak akun. Lebih baik tanya daripada salah.\n`;
       }
     }
 
@@ -1319,7 +1344,8 @@ async function buildFinancialContext(
         `3. JIKA AKUN TIDAK TERDAFTAR (contoh: user pakai 'Tunai' tapi tidak ada di daftar): JANGAN panggil tool apapun. Balas dengan teks meminta user memilih akun yang tersedia.\n` +
         `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
         `5. Jika mencatat tagihan (add_subscription), pilih cycle yang tepat dan hitung nextDueDate terdekat yang masuk akal.\n` +
-        `6. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.\n`;
+        `6. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.\n` +
+        `7. PENYESUAIAN SALDO: Jika user minta "sesuaikan/atur/ubah saldo" ke nominal tertentu, WAJIB gunakan tool adjust_balance. JANGAN bilang "sudah disesuaikan" jika belum memanggil tool adjust_balance.\n`;
     }
   }
 
@@ -1341,12 +1367,13 @@ async function buildFinancialContext(
     if (draftMode) {
       actionFormat += "- Membuat draft transaksi (draft_transaction).\n";
       actionFormat += "- Tentukan category secara spesifik.\n";
-      actionFormat += "- Jika di struk ada petunjuk dompet/akun, otomatis isi accountId.\n";
+      actionFormat += "- Jika di struk JELAS ada petunjuk dompet/akun, otomatis isi accountId.\n";
     } else {
       actionFormat += "- Mencatat transaksi baru (record_transaction).\n";
       actionFormat += "- Memindahkan uang antar dompet (transfer_balance).\n";
       actionFormat += "- Mengubah transaksi (update_transaction).\n";
       actionFormat += "- Menghapus transaksi (delete_transaction).\n";
+      actionFormat += "- Menyesuaikan/koreksi saldo dompet (adjust_balance).\n";
     }
     actionFormat +=
       "TENTANG GRAFIK: Jika user minta chart/grafik/diagram, sisipkan [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK] di akhir pesan.\n" +
@@ -1739,12 +1766,14 @@ aiRoutes.post("/chat", async (c) => {
     : null;
 
   // ─── Path A: Complete transaction → save langsung, tanpa AI ──
+  // Exclude balance adjustment requests — they need the AI + adjust_balance tool
   if (
     txClass?.isTransaction &&
     txClass.amount &&
     txClass.type &&
     txClass.accountId &&
-    txClass.type !== "TRANSFER"
+    txClass.type !== "TRANSFER" &&
+    !isBalanceAdjustmentRequest(message)
   ) {
     const matchedAccount = accounts.find((a) => a.id === txClass.accountId)!;
     console.log(
@@ -1896,6 +1925,11 @@ aiRoutes.post("/chat", async (c) => {
 
   // Override intent jika LLM classifier mendeteksi transaksi (meski incomplete)
   if (txClass?.isTransaction) {
+    intent = "transaksi";
+  }
+
+  // Override intent untuk penyesuaian saldo — butuh tools adjust_balance
+  if (isBalanceAdjustmentRequest(message)) {
     intent = "transaksi";
   }
 
@@ -2257,6 +2291,7 @@ aiRoutes.post("/chat", async (c) => {
           if (ev.action === "delete") eventType = "transaction_deleted";
           if (ev.action === "add_subscription") eventType = "subscription_created";
           if (ev.action === "set_alert_threshold") eventType = "threshold_updated";
+          if (ev.action === "adjust_balance") eventType = "balance_adjusted";
 
           // We must generate the text so it renders in chat and saves to history.
           if (isAiResponseEmpty) {
@@ -2280,6 +2315,10 @@ aiRoutes.post("/chat", async (c) => {
             } else if (eventType === "threshold_updated") {
               const threshold = Number(ev.threshold || 0).toLocaleString("id-ID");
               msg = `⚙️ Batas peringatan pengeluaran besar berhasil diubah menjadi **Rp ${threshold}**.\n\n`;
+            } else if (eventType === "balance_adjusted") {
+              const acc = ev.account;
+              const amt = Number(acc.balance || 0).toLocaleString("id-ID");
+              msg = `✅ Saldo **${acc.name}** telah disesuaikan menjadi **Rp ${amt}**.\n\n`;
             }
 
             fullResponse += msg;
@@ -2287,7 +2326,7 @@ aiRoutes.post("/chat", async (c) => {
           }
 
           await s.write(
-            `data: ${JSON.stringify({ type: eventType, transaction: ev.transaction })}\n\n`,
+            `data: ${JSON.stringify({ type: eventType, transaction: ev.transaction, account: ev.account })}\n\n`,
           );
         }
       }
@@ -2326,7 +2365,8 @@ aiRoutes.post("/chat/sync", async (c) => {
   // ─── Deteksi intent + bangun system prompt ──────────────
   let { intent, timeRange } = await extractIntentAndTemporal(message);
   // draft mode selalu butuh full context (transaksi)
-  let finalIntent = draft ? "transaksi" : intent;
+  // penyesuaian saldo juga butuh full context + tools (adjust_balance)
+  let finalIntent = (draft || isBalanceAdjustmentRequest(message)) ? "transaksi" : intent;
   const wantsChart =
     /\b(grafik|chart|bagan|diagram|visualisasi|tampilkan|lihat)\b/i.test(
       message,

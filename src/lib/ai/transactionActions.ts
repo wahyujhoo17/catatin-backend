@@ -205,6 +205,39 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         continue;
       }
 
+      // --- adjust_balance ---
+      if (actionType === "adjust_balance") {
+        const { accountId, newBalance } = parsed;
+        if (!accountId || typeof newBalance !== "number" || isNaN(newBalance)) continue;
+
+        const acc = accounts.find(
+          (a) => a.id === accountId || a.name.toLowerCase() === accountId.toLowerCase()
+        );
+        if (!acc) {
+          console.warn(`[AI] adjust_balance: account not found: ${accountId}`);
+          continue;
+        }
+
+        const oldBalance = Number(acc.balance);
+        const updated = await prisma.account.update({
+          where: { id: acc.id },
+          data: { balance: newBalance },
+        });
+
+        console.log(`[AI] Balance adjusted: ${acc.name} from ${oldBalance} to ${newBalance}`);
+
+        processedEvents.push({
+          action: "adjust_balance",
+          account: {
+            id: updated.id,
+            name: updated.name,
+            balance: Number(updated.balance),
+            oldBalance,
+          }
+        });
+        continue;
+      }
+
       // --- record_transaction & draft_transaction ---
       if (actionType === "record_transaction" || actionType === "draft_transaction") {
         const {
@@ -339,7 +372,7 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
   }
 
   const hasDbChanges = processedEvents.some(
-    (e) => e.action === "delete" || e.action === "update" || e.action === "record" || e.action === "transfer",
+    (e) => e.action === "delete" || e.action === "update" || e.action === "record" || e.action === "transfer" || e.action === "adjust_balance",
   );
   if (hasDbChanges) {
     try {
@@ -360,12 +393,13 @@ export type TransactionActionType =
   | "draft_transaction"
   | "transfer_balance"
   | "add_subscription"
-  | "set_alert_threshold";
+  | "set_alert_threshold"
+  | "adjust_balance";
 
 export function stripActions(content: string): string {
   // Since we use native function calling now, the content usually won't have [ACTION] blocks.
   // But we keep this for backward compatibility with old chat history just in case.
   return content
-    .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription|set_alert_threshold)\][\s\S]*?\[\/ACTION\]/g, "")
+    .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription|set_alert_threshold|adjust_balance)\][\s\S]*?\[\/ACTION\]/g, "")
     .trim();
 }

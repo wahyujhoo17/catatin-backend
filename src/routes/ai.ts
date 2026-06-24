@@ -804,7 +804,7 @@ function analyzeIntent(message: string): {
 
   // ── Pengeluaran atau query keuangan umum ─────────────────────
   if (
-    /\b(pengeluaran|expense|keluar|belanja|boros|hemat|budget|habis berapa|abis berapa)\b/i.test(
+    /\b(pengeluaran|expense|keluar|belanja|boros|hemat|budget|habis berapa|abis berapa|tagihan|langganan|cicilan|bill)\b/i.test(
       text,
     )
   ) {
@@ -865,7 +865,7 @@ Tugasmu adalah menganalisis pesan user dan mengekstrak:
 Definisi Intent:
 - non_finansial: sapaan, bantuan, ucapan terima kasih, atau topik di luar keuangan.
 - saldo: menanyakan jumlah uang yang dimiliki, sisa saldo tabungan/rekening.
-- pengeluaran: menanyakan jumlah uang yang dihabiskan, belanjaan, biaya hidup, pengeluaran.
+- pengeluaran: menanyakan jumlah uang yang dihabiskan, belanjaan, biaya hidup, pengeluaran, tagihan, langganan, cicilan.
 - pemasukan: menanyakan gaji, bonus, komisi, uang masuk.
 - transaksi: berniat melakukan transaksi baru (misal: "catat makan 50k", "bayar listrik 100rb"), atau mengubah/menghapus transaksi lama.
 - saran: meminta analisis, evaluasi, review keuangan, tips hemat, rekomendasi, atau menanyakan "apakah saya boros", "gimana keuangan saya", "bantu atur keuangan".
@@ -1126,6 +1126,17 @@ async function buildFinancialContext(
       : Promise.resolve([]),
   );
 
+  // Subscriptions: fetch for all intents except non_finansial
+  keys.push("subscriptions");
+  queries.push(
+    intent !== "non_finansial"
+      ? prisma.subscription.findMany({
+          where: { userId, isActive: true },
+          orderBy: { nextDueDate: "asc" }
+        })
+      : Promise.resolve([]),
+  );
+
   const results = await Promise.all(queries);
   const d: Record<string, any> = {};
   keys.forEach((k, i) => (d[k] = results[i]));
@@ -1262,6 +1273,13 @@ async function buildFinancialContext(
     dataParts.push(`Transaksi hari ini: ${txItems}`);
   }
 
+  if (intent !== "non_finansial" && d.subscriptions && d.subscriptions.length > 0) {
+    const subStr = d.subscriptions
+      .map((s: any) => `${s.name}(Rp${s.amount.toLocaleString("id-ID")}/${s.cycle}, due:${s.nextDueDate.toISOString().split("T")[0]})`)
+      .join(" | ");
+    dataParts.push(`Tagihan/Langganan Rutin Aktif: ${subStr}`);
+  }
+
   const dataSection =
     dataParts.length > 0 ? "DATA:\n" + dataParts.join(" | ") : "";
 
@@ -1386,6 +1404,7 @@ async function buildFinancialContext(
         `Aturan (periode: ${range.label}):\n` +
         "- Jawab pertanyaan pengeluaran HANYA dari DATA di bawah.\n" +
         "- Sebutkan total pengeluaran + breakdown per-kategori dengan - list.\n" +
+        "- Jika user menanyakan tentang tagihan, langganan, cicilan, jawab dari data Tagihan/Langganan Rutin Aktif di DATA di bawah.\n" +
         "- Jika user bertanya tanggal/hari paling boros, jawab dari data per-tanggal.\n" +
         // P4: instruksi saran/analisis
         "- Jika user minta evaluasi, analisa, atau saran: berikan 2-3 rekomendasi konkret berbasis DATA.\n" +
@@ -1449,6 +1468,7 @@ async function buildFinancialContext(
         "- Jika user tanya pengeluaran: sebut total + per-kategori dari DATA + " +
         chartTag +
         ".\n" +
+        "- Jika user menanyakan tagihan/langganan/cicilan, sebutkan dari data Tagihan/Langganan Rutin Aktif di DATA.\n" +
         "- Jika user tanya nominal spesifik: WAJIB jawab dari DATA. JANGAN cuma 'lihat grafik'.\n" +
         (draftMode
           ? ""
@@ -1473,6 +1493,7 @@ async function buildFinancialContext(
         `Aturan (periode: ${range.label}):\n` +
         "- Jawab pertanyaan keuangan HANYA dari DATA di bawah.\n" +
         "- Sebutkan total pemasukan + pengeluaran + saldo.\n" +
+        "- Jika ada data Tagihan/Langganan Rutin Aktif, sertakan juga informasinya jika relevan.\n" +
         "- Breakdown per-kategori pengeluaran dengan - list (cukup sebut nama + nominal).\n" +
         "- Jika user minta saran/masukan: gunakan list bernomor urut (1., 2., 3., dst.) pendek, tulis nomor dan teks di baris yang sama (contoh: '1. Batasi pengeluaran...'). JANGAN menuliskan nomor list di baris terpisah atau menggunakan angka 1. untuk semua item.\n" +
         "- JANGAN beri saran kalau user tidak minta.\n" +

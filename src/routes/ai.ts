@@ -1285,9 +1285,10 @@ async function buildFinancialContext(
       accountRule = `📋 ${accounts.length} akun tersedia: ${accOptions}.\n`;
       if (draftMode) {
         accountRule += `ATURAN DRAFT:\n` +
-          `1. WAJIB SELALU panggil tool 'draft_transaction'. JANGAN panggil 'record_transaction'.\n` +
-          `2. Cek apakah di struk ada petunjuk dompet/akun dari daftar. Jika ada, otomatis isi accountId-nya.\n` +
-          `3. JIKA di struk TIDAK ADA petunjuk dompet/akun, kosongkan accountId ("") DAN tambahkan teks: [ASK_ACCOUNT:${accOptions}] di pesan kamu.\n`;
+          `1. WAJIB tuliskan ringkasan analisis struk (Jenis, Deskripsi, Kategori, Nominal) pada pesan teks sebelum memanggil tool.\n` +
+          `2. WAJIB SELALU panggil tool 'draft_transaction'. JANGAN panggil 'record_transaction'.\n` +
+          `3. Cek apakah di struk ada petunjuk dompet/akun dari daftar. Jika ada, otomatis isi accountId-nya.\n` +
+          `4. JIKA di struk TIDAK ADA petunjuk dompet/akun, kosongkan accountId ("") DAN tambahkan teks: [ASK_ACCOUNT:${accOptions}] di pesan kamu.\n`;
       }
     }
 

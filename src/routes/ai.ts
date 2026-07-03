@@ -172,13 +172,14 @@ export const aiTools = [
       parameters: {
         type: "object",
         properties: {
+          summary: { type: "string", description: "WAJIB: Tuliskan ringkasan analisis struk di sini (Jenis, Deskripsi, Kategori, Nominal) dalam bentuk poin-poin markdown" },
           type: { type: "string", enum: ["EXPENSE", "INCOME"] },
           amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
           description: { type: "string", description: "Deskripsi transaksi" },
           category: { type: "string", description: "Kategori (contoh: Makanan, Gaji, dll)" },
           accountId: { type: "string", description: "ID akun yang digunakan (kosongkan jika tidak ada petunjuk)" }
         },
-        required: ["type", "amount", "description", "category"]
+        required: ["summary", "type", "amount", "description", "category"]
       }
     }
   },
@@ -2482,13 +2483,6 @@ aiRoutes.post("/chat/sync", async (c) => {
     // ─── Safety net: hapus ID internal yang mungkin bocor ──
     content = stripLeakedIds(content);
 
-    // ─── Fallback: inject [ASK_ACCOUNT:...] jika AI lupa ──
-    const injectedTag = ensureAskAccount(content, accounts);
-    if (injectedTag) {
-      content += injectedTag;
-      console.log("[AI] Injected missing [ASK_ACCOUNT:...] tag");
-    }
-
     // ─── Parse & proses transaksi dari respons ────────────
     let processedEvents: any[] = [];
     if (toolCalls.length > 0) {
@@ -2497,6 +2491,21 @@ aiRoutes.post("/chat/sync", async (c) => {
         user.userId,
         accounts,
       );
+      
+      // Jika AI tidak memberikan teks (hanya tool call), ambil dari parameter 'summary'
+      if (!content || content.trim() === "") {
+        const draftCall = toolCalls.find(t => t.function?.name === "draft_transaction");
+        if (draftCall && draftCall.function?.arguments) {
+          try {
+            const args = JSON.parse(draftCall.function.arguments);
+            if (args.summary) {
+              content = args.summary;
+            }
+          } catch (e) {
+            console.error("[AI] Gagal parse summary dari tool argument", e);
+          }
+        }
+      }
     } else if (content.includes("[ACTION:")) {
       const actionRegex = /\[ACTION:\s*(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance)\s*\]([\s\S]*?)\[\/ACTION\]/g;
       let match;
@@ -2514,8 +2523,27 @@ aiRoutes.post("/chat/sync", async (c) => {
       }
     }
 
-    // Map output structure to maintain backward compatibility if needed by the frontend sync caller
     const createdTxs = processedEvents.map((e) => e.transaction);
+
+    // ─── Fallback & Enforcement: inject [ASK_ACCOUNT:...] ──
+    let needsAccountPrompt = false;
+    if (draft && createdTxs.length > 0) {
+      // Jika ada draf yang dompetnya kosong, WAJIB tanya user!
+      if (createdTxs.some((tx) => !tx.accountId)) {
+        needsAccountPrompt = true;
+      }
+    }
+    
+    let injectedTag = ensureAskAccount(content, accounts);
+    if (needsAccountPrompt && !injectedTag && accounts.length >= 2 && !/\[ASK_ACCOUNT:/.test(content)) {
+       const accOptions = accounts.map((a) => a.name).join(",");
+       injectedTag = `\n\n[ASK_ACCOUNT:${accOptions}]`;
+    }
+
+    if (injectedTag) {
+      content += injectedTag;
+      console.log("[AI] Injected missing [ASK_ACCOUNT:...] tag");
+    }
 
     // Strip [ACTION] blocks dari content yang disimpan
     // Strip [ACTION] blocks dari content yang disimpan

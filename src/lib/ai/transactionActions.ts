@@ -269,7 +269,8 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           }
         }
         // Auto-assign ke akun pertama (utama) jika AI tidak menyebutkan dompet
-        if (!finalAccountId && accounts.length > 0) {
+        // KECUALI untuk draft_transaction, biarkan kosong agar user memilih sendiri.
+        if (!finalAccountId && accounts.length > 0 && actionType !== "draft_transaction") {
           finalAccountId = accounts[0].id;
         }
 

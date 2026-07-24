@@ -204,16 +204,31 @@ export const aiTools = [
     type: "function",
     function: {
       name: "add_subscription",
-      description: "Catat jadwal langganan atau tagihan rutin (Netflix, Kos, BPJS, cicilan, dll)",
+      description: "Catat pengingat/notifikasi tagihan atau alokasi tabungan rutin (Netflix, Kos, BPJS, pengingat menabung mingguan, alarm tagihan wifi, dll). WAJIB panggil ini jika user minta pengingat/notifikasi rutin!",
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string", description: "Nama langganan/tagihan (misal: 'Kos', 'Netflix')" },
+          name: { type: "string", description: "Nama pengingat/tagihan (misal: 'Kos', 'Netflix', 'Pengingat Menabung')" },
           amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
-          cycle: { type: "string", enum: ["MONTHLY", "YEARLY", "WEEKLY", "QUARTERLY", "SEMI_ANNUALLY"], description: "Siklus tagihan. QUARTERLY=3 bulan, SEMI_ANNUALLY=6 bulan." },
+          cycle: { type: "string", enum: ["MONTHLY", "YEARLY", "WEEKLY", "QUARTERLY", "SEMI_ANNUALLY"], description: "Siklus tagihan. WEEKLY=mingguan, MONTHLY=bulanan." },
           nextDueDate: { type: "string", description: "Tanggal jatuh tempo berikutnya (format: YYYY-MM-DD)" }
         },
         required: ["name", "amount", "cycle", "nextDueDate"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_subscription",
+      description: "Hapus atau tandai lunas/nonaktifkan pengingat tagihan/langganan rutin (misal: 'hapus tagihan Kos', 'tagihan Netflix sudah lunas', 'batalkan pengingat menabung')",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "ID tagihan rutin dari daftar DATA jika ada" },
+          name: { type: "string", description: "Nama tagihan/pengingat rutin (misal: Kos, Netflix, BPJS)" }
+        },
+        required: []
       }
     }
   },
@@ -468,6 +483,12 @@ function isSavingGoalRequest(message: string): boolean {
   const hasAmount = /\b\d[\d.,]*\s*(?:jt|juta|rb|ribu|[kK])?\b/i.test(text);
 
   return goalKeywords || (buyingIntent && hasAmount);
+}
+
+function isNotificationOrSubscriptionRequest(message: string): boolean {
+  if (!message) return false;
+  const text = message.toLowerCase();
+  return /\b(notifikasi|ingatkan|pengingat|alarm|rutin|setiap minggu|tiap minggu|setiap bulan|tiap bulan|lunas|hapus tagihan|nonaktifkan tagihan)\b/i.test(text);
 }
 
 // ─── Parse transaction details from a message like "makan malam 45 rb" ──
@@ -874,12 +895,13 @@ function analyzeIntent(message: string): {
   // Supaya "beli kopi 15k tadi" tidak salah ambil timeRange
   const timeRange = parseTemporal(message);
 
-  // ── Transaksi BARU / CANCEL / EDIT / ADJUST / GOAL: prioritas tertinggi setelah non-finansial ──────────
+  // ── Transaksi BARU / CANCEL / EDIT / ADJUST / GOAL / SUBSCRIPTION: prioritas tertinggi setelah non-finansial ──────────
   if (
     isLikelyTransaction(message) ||
     isCancellationRequest(message) ||
     isBalanceAdjustmentRequest(message) ||
-    isSavingGoalRequest(message)
+    isSavingGoalRequest(message) ||
+    isNotificationOrSubscriptionRequest(message)
   ) {
     return { intent: "transaksi", timeRange: null };
   }
@@ -1429,9 +1451,9 @@ export async function buildFinancialContext(
 
   if (intent !== "non_finansial" && d.subscriptions && d.subscriptions.length > 0) {
     const subStr = d.subscriptions
-      .map((s: any) => `${s.name}(Rp${s.amount.toLocaleString("id-ID")}/${s.cycle}, due:${s.nextDueDate.toISOString().split("T")[0]})`)
+      .map((s: any) => `[ID:${s.id}]${s.name}(Rp${s.amount.toLocaleString("id-ID")}/${s.cycle}, due:${s.nextDueDate.toISOString().split("T")[0]})`)
       .join(" | ");
-    dataParts.push(`Tagihan/Langganan Rutin Aktif: ${subStr}`);
+    dataParts.push(`Tagihan/Langganan Rutin Aktif & Notifikasi: ${subStr}`);
   }
 
   // Budget progress context for AI
@@ -1538,7 +1560,11 @@ export async function buildFinancialContext(
         `10. TARGET TABUNGAN IMPIAN & WISHLIST:\n` +
         `   - JIKA user meminta "tambahkan/buat target [nominal] untuk [nama]" (misal: "tambahkan target 30jt untuk beli laptop"): WAJIB panggil tool create_saving_goal dengan name dan targetAmount.\n` +
         `   - JIKA user meminta "setor/alokasikan [nominal] ke [nama target]": WAJIB panggil tool allocate_saving_goal.\n` +
-        `   - DILARANG KERAS membuat ringkasan laporan pemasukan/pengeluaran/saldo jika user HANYA meminta membuat atau menyetor target tabungan! Cukup panggil tool create_saving_goal atau allocate_saving_goal.\n`;
+        `   - DILARANG KERAS membuat ringkasan laporan pemasukan/pengeluaran/saldo jika user HANYA meminta membuat atau menyetor target tabungan! Cukup panggil tool create_saving_goal atau allocate_saving_goal.\n` +
+        `11. NOTIFIKASI, PENGINGAT RUTIN & HAPUS TAGIHAN LUNAS:\n` +
+        `   - Catatin AI MEMILIKI sistem notifikasi & alarm pengingat otomatis (Push Notification / WhatsApp / Background Cron). DILARANG KERAS menjawab bahwa Anda "tidak dapat mengatur notifikasi otomatis"!\n` +
+        `   - JIKA user meminta notifikasi/pengingat rutin (misal: "berikan saya notifikasi setiap minggu untuk menabung 250rb" atau "ingatkan bayar wifi 300rb tiap bulan"): WAJIB panggil tool add_subscription dengan cycle (WEEKLY/MONTHLY) dan name yang sesuai!\n` +
+        `   - JIKA user minta menghapus/membatalkan tagihan karena sudah lunas/tidak dipakai (misal: "hapus tagihan Kos", "tagihan Netflix sudah lunas"): WAJIB panggil tool delete_subscription dengan name atau id tagihan!\n`;
     }
   }
 
@@ -2500,6 +2526,7 @@ aiRoutes.post("/chat", async (c) => {
           if (ev.action === "transfer") eventType = "transfer_created";
           if (ev.action === "draft") eventType = "draft_created";
           if (ev.action === "add_subscription") eventType = "subscription_created";
+          if (ev.action === "delete_subscription") eventType = "subscription_deleted";
           if (ev.action === "set_alert_threshold") eventType = "threshold_updated";
           if (ev.action === "adjust_balance") eventType = "balance_adjusted";
           if (ev.action === "set_budget") eventType = "budget_created";
@@ -2540,7 +2567,10 @@ aiRoutes.post("/chat", async (c) => {
             } else if (eventType === "subscription_created") {
               const sub = ev.subscription;
               const amt = Number(sub.amount || 0).toLocaleString("id-ID");
-              msg = `📅 Pengingat tagihan dibuat: ${sub.name} (Rp ${amt}) siklus ${sub.cycle}, jatuh tempo berikutnya: ${sub.nextDueDate ? new Date(sub.nextDueDate).toISOString().split("T")[0] : ""}\n\n`;
+              msg = `📅 Pengingat tagihan/alokasi dibuat: ${sub.name} (Rp ${amt}) siklus ${sub.cycle}, jatuh tempo berikutnya: ${sub.nextDueDate ? new Date(sub.nextDueDate).toISOString().split("T")[0] : ""}\n\n`;
+            } else if (eventType === "subscription_deleted") {
+              const sub = ev.subscription;
+              msg = `🗑️ Pengingat tagihan **${sub ? sub.name : ""}** berhasil dihapus / ditandai lunas.\n\n`;
             } else if (eventType === "threshold_updated") {
               const threshold = Number(ev.threshold || 0).toLocaleString("id-ID");
               msg = `⚙️ Batas peringatan pengeluaran besar berhasil diubah menjadi **Rp ${threshold}**.\n\n`;

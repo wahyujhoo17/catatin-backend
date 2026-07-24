@@ -295,6 +295,47 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         continue;
       }
 
+      // --- delete_subscription ---
+      if (actionType === "delete_subscription" || actionType === "remove_subscription") {
+        const { id, name } = parsed;
+        let sub = await prisma.subscription.findFirst({
+          where: {
+            userId,
+            OR: [
+              id ? { id } : undefined,
+              name ? { name: { contains: name, mode: "insensitive" } } : undefined
+            ].filter(Boolean) as any[]
+          }
+        });
+
+        // Fallback: search all subscriptions for fuzzy keyword matching
+        if (!sub) {
+          const allSubs = await prisma.subscription.findMany({ where: { userId } });
+          const searchKeyword = (name || "").toLowerCase().trim();
+          sub = allSubs.find((s) => {
+            const subName = s.name.toLowerCase();
+            return (
+              subName.includes(searchKeyword) ||
+              searchKeyword.includes(subName) ||
+              (searchKeyword.includes("menabung") && subName.includes("tabung")) ||
+              (searchKeyword.includes("tabung") && subName.includes("menabung"))
+            );
+          }) || (allSubs.length === 1 ? allSubs[0] : null);
+        }
+
+        if (!sub) {
+          console.warn(`[AI] Subscription not found for delete: ${id || name}`);
+          continue;
+        }
+
+        await prisma.subscription.delete({ where: { id: sub.id } });
+        processedEvents.push({
+          action: "delete_subscription",
+          subscription: sub
+        });
+        continue;
+      }
+
       // --- set_alert_threshold ---
       if (actionType === "set_alert_threshold") {
         let { threshold } = parsed;

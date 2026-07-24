@@ -237,7 +237,7 @@ export const aiTools = [
     type: "function",
     function: {
       name: "delete_transaction",
-      description: "Hapus transaksi",
+      description: "Hapus atau batalkan/undo transaksi. Gunakan ID transaksi dari daftar transaksi di konteks RAHASIA/DATA. Jika user bilang 'batal', 'cancel', 'kembalikan', atau 'undo', panggil tool ini dengan ID transaksi terakhir yang relevan.",
       parameters: {
         type: "object",
         properties: {
@@ -279,18 +279,77 @@ export const aiTools = [
   {
     type: "function",
     function: {
-      name: "draft_transaction",
-      description: "Buat draft transaksi jika info belum lengkap",
+      name: "set_budget",
+      description: "Buat atau ubah target budget bulanan/mingguan untuk suatu kategori pengeluaran",
       parameters: {
         type: "object",
         properties: {
-          type: { type: "string", enum: ["EXPENSE", "INCOME"] },
-          amount: { type: "number" },
-          description: { type: "string" },
-          category: { type: "string" },
-          accountId: { type: "string", description: "ID akun (opsional)" }
+          category: { type: "string", description: "Nama kategori pengeluaran" },
+          amount: { type: "number", description: "Nominal budget (angka tanpa titik/koma)" },
+          period: { type: "string", enum: ["MONTHLY", "WEEKLY", "YEARLY"], description: "Periode budget" }
         },
-        required: ["type", "amount", "description"]
+        required: ["category", "amount", "period"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "split_bill",
+      description: "Catat transaksi patungan/split bill dimana user membayar total tapi akan dibagi ke orang lain",
+      parameters: {
+        type: "object",
+        properties: {
+          totalAmount: { type: "number", description: "Total uang ditalangin" },
+          description: { type: "string", description: "Deskripsi (contoh: Makan siang bareng)" },
+          category: { type: "string", description: "Kategori pengeluaran" },
+          accountId: { type: "string", description: "ID Akun untuk pembayaran (kosongkan jika otomatis)" },
+          splits: {
+            type: "array",
+            description: "Daftar hutang/kasbon ke teman",
+            items: {
+              type: "object",
+              properties: {
+                targetName: { type: "string", description: "Nama teman" },
+                amount: { type: "number", description: "Jumlah hutang/kasbon yang harus dibayar teman" }
+              },
+              required: ["targetName", "amount"]
+            }
+          }
+        },
+        required: ["totalAmount", "description", "category", "splits"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_saving_goal",
+      description: "Buat impian/target tabungan baru (contoh: 'mau menabung untuk membeli laptop 29jt', 'tambahkan target 15 juta untuk DP Rumah')",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Nama barang/impian/target tabungan (contoh: Laptop, DP Rumah, Liburan)" },
+          targetAmount: { type: "number", description: "Nominal angka utuh target tabungan dalam Rupiah (konversi 29jt -> 29000000, 500rb -> 500000, tanpa titik/koma)" },
+          currentAmount: { type: "number", description: "Nominal tabungan awal yang sudah terkumpul (opsional)" },
+          targetDate: { type: "string", description: "Tanggal target tercapai (format YYYY-MM-DD, opsional)" }
+        },
+        required: ["name", "targetAmount"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "allocate_saving_goal",
+      description: "Setor/alokasikan/tambahkan dana ke target tabungan impian yang sudah ada",
+      parameters: {
+        type: "object",
+        properties: {
+          goalId: { type: "string", description: "ID atau nama target tabungan yang ingin ditambahkan (dari daftar DATA)" },
+          amount: { type: "number", description: "Nominal angka utuh yang disetorkan dalam Rupiah (konversi 500rb -> 500000, 1jt -> 1000000, tanpa titik/koma)" }
+        },
+        required: ["goalId", "amount"]
       }
     }
   }
@@ -382,11 +441,33 @@ function isLikelyTransaction(message: string): boolean {
 
 // ─── Detect balance adjustment requests ───────────────────
 // "sesuaikan saldo bri jadi 500rb", "atur ulang saldo bca 2jt", etc.
+
+function isCancellationRequest(message: string): boolean {
+  const text = message.toLowerCase();
+  return /\b(batal|cancel|kembalikan|hapus|undo|salah catat)\b/i.test(text);
+}
+
 function isBalanceAdjustmentRequest(message: string): boolean {
   const text = message.toLowerCase();
   const hasAdjustKeyword = /\b(sesuaikan|penyesuaian|koreksi|atur ulang|set saldo|ubah saldo|atur saldo|update saldo)\b/i.test(text);
   const hasSaldoKeyword = /\b(saldo|balance)\b/i.test(text);
   return hasAdjustKeyword && hasSaldoKeyword;
+}
+
+function isSavingGoalRequest(message: string): boolean {
+  if (!message) return false;
+  const text = message.toLowerCase();
+
+  // Kata kunci utama target tabungan
+  const goalKeywords = /\b(target|tabungan|tabung|menabung|nabung|impian|wishlist|setor|setoran|alokasi|alokasikan)\b/i.test(text);
+
+  // Niat membeli/mengumpulkan uang untuk sesuatu
+  const buyingIntent = /\b(mau beli|ingin beli|rencana beli|untuk beli|membeli|kumpul uang|kumpulkan uang|kumpulin uang|pengen beli|butuh dana|butuh uang|dana untuk|budget untuk)\b/i.test(text);
+
+  // Ada nominal uang (e.g. 29jt, 500rb, 15000000)
+  const hasAmount = /\b\d[\d.,]*\s*(?:jt|juta|rb|ribu|[kK])?\b/i.test(text);
+
+  return goalKeywords || (buyingIntent && hasAmount);
 }
 
 // ─── Parse transaction details from a message like "makan malam 45 rb" ──
@@ -566,18 +647,22 @@ OUTPUT: HANYA JSON, tanpa markdown, tanpa \`\`\`, tanpa penjelasan.`;
     );
 
     const raw = response.content.trim();
-    // Bersihkan markdown code fence jika ada
-    const jsonStr = raw
-      .replace(/^```(?:json)?\s*\n?/i, "")
-      .replace(/\n?```\s*$/i, "")
-      .trim();
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    let jsonStr = jsonMatch ? jsonMatch[0] : raw;
+    jsonStr = jsonStr
+      .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
+      .replace(/,\s*([}\]])/g, '$1');
 
     if (!jsonStr) {
-      console.warn("[AI] Transaction classifier returned empty response");
       return null;
     }
 
-    const parsed = JSON.parse(jsonStr);
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      return null;
+    }
 
     // Validasi & normalisasi
     if (!parsed || typeof parsed.isTransaction !== "boolean") return null;
@@ -789,8 +874,13 @@ function analyzeIntent(message: string): {
   // Supaya "beli kopi 15k tadi" tidak salah ambil timeRange
   const timeRange = parseTemporal(message);
 
-  // ── Transaksi BARU: prioritas tertinggi setelah non-finansial ──────────
-  if (isLikelyTransaction(message)) {
+  // ── Transaksi BARU / CANCEL / EDIT / ADJUST / GOAL: prioritas tertinggi setelah non-finansial ──────────
+  if (
+    isLikelyTransaction(message) ||
+    isCancellationRequest(message) ||
+    isBalanceAdjustmentRequest(message) ||
+    isSavingGoalRequest(message)
+  ) {
     return { intent: "transaksi", timeRange: null };
   }
 
@@ -925,17 +1015,23 @@ Format JSON:
     ], { temperature: 0, maxTokens: 150, jsonMode: true });
 
     const raw = res.content.trim();
-    const cleanJson = raw
-      .replace(/^```(?:json)?\s*\n?/i, "")
-      .replace(/\n?```\s*$/i, "")
-      .trim();
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    let cleanJson = jsonMatch ? jsonMatch[0] : raw;
+    cleanJson = cleanJson
+      .replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
+      .replace(/,\s*([}\]])/g, '$1');
 
     if (!cleanJson) {
-      console.warn("[AI] Intent LLM extractor returned empty response, falling back to regex.");
       return analyzeIntent(message);
     }
 
-    const parsed = JSON.parse(cleanJson);
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(cleanJson);
+    } catch {
+      return analyzeIntent(message);
+    }
+
     if (!parsed || !parsed.intent) {
       return analyzeIntent(message);
     }
@@ -963,7 +1059,7 @@ Format JSON:
   }
 }
 
-async function buildFinancialContext(
+export async function buildFinancialContext(
   userId: string,
   intent: ChatIntent,
   timeRange: TimeRange | null,
@@ -1162,6 +1258,39 @@ async function buildFinancialContext(
       : Promise.resolve([]),
   );
 
+  // Budgets: fetch active budgets for all non_finansial intents
+  keys.push("budgets");
+  queries.push(
+    intent !== "non_finansial"
+      ? prisma.budget.findMany({
+          where: { userId },
+          include: { category: true }
+        })
+      : Promise.resolve([]),
+  );
+
+  // User Config (alertThreshold): fetch for all non_finansial intents
+  keys.push("userConfig");
+  queries.push(
+    intent !== "non_finansial"
+      ? prisma.user.findUnique({
+          where: { id: userId },
+          select: { customAiConfig: true }
+        })
+      : Promise.resolve(null),
+  );
+
+  // Saving Goals: fetch active goals for all non_finansial intents
+  keys.push("savingGoals");
+  queries.push(
+    intent !== "non_finansial"
+      ? prisma.savingGoal.findMany({
+          where: { userId },
+          orderBy: { createdAt: "desc" },
+        })
+      : Promise.resolve([]),
+  );
+
   const results = await Promise.all(queries);
   const d: Record<string, any> = {};
   keys.forEach((k, i) => (d[k] = results[i]));
@@ -1305,6 +1434,59 @@ async function buildFinancialContext(
     dataParts.push(`Tagihan/Langganan Rutin Aktif: ${subStr}`);
   }
 
+  // Budget progress context for AI
+  if (intent !== "non_finansial" && d.budgets && d.budgets.length > 0) {
+    const { startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear } = require("date-fns");
+    const budgetList = await Promise.all(
+      (d.budgets as any[]).map(async (b) => {
+        let startDt: Date;
+        let endDt: Date;
+        const nowVal = new Date();
+        if (b.period === "WEEKLY") {
+          startDt = startOfWeek(nowVal, { weekStartsOn: 1 });
+          endDt = endOfWeek(nowVal, { weekStartsOn: 1 });
+        } else if (b.period === "YEARLY") {
+          startDt = startOfYear(nowVal);
+          endDt = endOfYear(nowVal);
+        } else {
+          startDt = startOfMonth(nowVal);
+          endDt = endOfMonth(nowVal);
+        }
+
+        const aggregate = await prisma.transaction.aggregate({
+          where: {
+            userId,
+            type: "EXPENSE",
+            categoryId: b.categoryId,
+            date: { gte: startDt, lte: endDt }
+          },
+          _sum: { amount: true }
+        });
+
+        const spent = aggregate._sum.amount || 0;
+        const remaining = b.amount - spent;
+        const catName = b.category?.name || "Semua Kategori";
+        return `${catName} (${b.period}): target Rp${b.amount.toLocaleString("id-ID")}, terpakai Rp${spent.toLocaleString("id-ID")}, sisa Rp${remaining.toLocaleString("id-ID")}`;
+      })
+    );
+    dataParts.push(`Laporan Budget Aktif: ${budgetList.join(" | ")}`);
+  }
+
+  if (intent !== "non_finansial") {
+    const userCfg = (d.userConfig?.customAiConfig as any) || {};
+    const alertThreshold = userCfg.alertThreshold ?? 500000;
+    dataParts.push(`Batas Peringatan Pengeluaran Besar (Alert Threshold): Rp${alertThreshold.toLocaleString("id-ID")}`);
+  }
+
+  if (intent !== "non_finansial" && d.savingGoals && d.savingGoals.length > 0) {
+    const goalList = (d.savingGoals as any[]).map((g) => {
+      const pct = g.targetAmount > 0 ? Math.min((g.currentAmount / g.targetAmount) * 100, 100).toFixed(1) : "0";
+      const rem = Math.max(g.targetAmount - g.currentAmount, 0);
+      return `[ID:${g.id}]${g.name}:Rp${g.currentAmount.toLocaleString("id-ID")}/Rp${g.targetAmount.toLocaleString("id-ID")}(${pct}%, sisa Rp${rem.toLocaleString("id-ID")})`;
+    });
+    dataParts.push(`Target Tabungan Aktif: ${goalList.join(" | ")}`);
+  }
+
   const dataSection =
     dataParts.length > 0 ? "DATA:\n" + dataParts.join(" | ") : "";
 
@@ -1346,7 +1528,17 @@ async function buildFinancialContext(
         `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
         `5. Jika mencatat tagihan (add_subscription), pilih cycle yang tepat dan hitung nextDueDate terdekat yang masuk akal.\n` +
         `6. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.\n` +
-        `7. PENYESUAIAN SALDO: Jika user minta "sesuaikan/atur/ubah saldo" ke nominal tertentu, WAJIB gunakan tool adjust_balance. JANGAN bilang "sudah disesuaikan" jika belum memanggil tool adjust_balance.\n`;
+        `7. PENYESUAIAN SALDO: Jika user minta "sesuaikan/atur/ubah saldo" ke nominal tertentu, WAJIB gunakan tool adjust_balance. JANGAN bilang "sudah disesuaikan" jika belum memanggil tool adjust_balance.\n` +
+        `8. SARAN PROAKTIF (PENTING): Setiap kali selesai mencatat transaksi atau menyelesaikan tugas user, selalu tawarkan 1 saran tindakan lanjutan yang relevan di akhir jawaban (misal: tawarkan catat pengingat tagihan rutin jika transaksi bernuansa tagihan/kos/wifi/subscription, tawarkan buat budget bulanan, atau tawarkan cek saldo/grafik).\n` +
+        `9. PEMBATALAN / HAPUS TRANSAKSI & TRANSFER (SANGAT PENTING):\n` +
+        `   - JIKA user minta "batal", "cancel", "undo", "kembalikan", "hapus", atau "tidak jadi" dari transaksi/transfer yang baru dicatat:\n` +
+        `   - DILARANG KERAS menjawab bahwa transaksi/transfer "tidak dapat dibatalkan" atau menyuruh user menghubungi bank/layanan pelanggan! Catatin AI adalah asisten pencatatan keuangan pribadi, bukan aplikasi bank nyata. Semua transaksi di Catatin BISA DIBATALKAN DAN DIHAPUS kapan saja secara instan!\n` +
+        `   - WAJIB panggil tool delete_transaction dengan id transaksi dari DATA (misal dari daftar 'Transaksi hari ini' atau 'Daftar Transaksi').\n` +
+        `   - Untuk pembatalan transfer saldo, panggil delete_transaction dengan id salah satu transaksi transfer tersebut. Sistem database akan otomatis menghapus kedua pasangan transaksi transfer dan mengembalikan saldo bank/dompet asal & tujuan ke kondisi semula!\n` +
+        `10. TARGET TABUNGAN IMPIAN & WISHLIST:\n` +
+        `   - JIKA user meminta "tambahkan/buat target [nominal] untuk [nama]" (misal: "tambahkan target 30jt untuk beli laptop"): WAJIB panggil tool create_saving_goal dengan name dan targetAmount.\n` +
+        `   - JIKA user meminta "setor/alokasikan [nominal] ke [nama target]": WAJIB panggil tool allocate_saving_goal.\n` +
+        `   - DILARANG KERAS membuat ringkasan laporan pemasukan/pengeluaran/saldo jika user HANYA meminta membuat atau menyetor target tabungan! Cukup panggil tool create_saving_goal atau allocate_saving_goal.\n`;
     }
   }
 
@@ -1363,25 +1555,32 @@ async function buildFinancialContext(
   let actionFormat = "";
 
   if (needFullContext) {
-    actionFormat = "AKSI TERSEDIA:\n";
-    actionFormat += "Gunakan Function/Tools Calling yang tersedia untuk:\n";
-    if (draftMode) {
-      actionFormat += "- Membuat draft transaksi (draft_transaction).\n";
-      actionFormat += "- Tentukan category secara spesifik.\n";
-      actionFormat += "- Jika di struk JELAS ada petunjuk dompet/akun, otomatis isi accountId.\n";
+    if (accounts.length === 0) {
+      actionFormat = "⚠️ STATUS AKUN: KOSONG\n" +
+        "User saat ini belum memiliki dompet/rekening (saldo tidak ada).\n" +
+        "DILARANG KERAS berpura-pura mencatat transaksi atau menyesuaikan saldo.\n" +
+        "Jika user meminta catat pengeluaran, pemasukan, atau tambah/sesuaikan saldo, WAJIB tolak dengan sopan dan instruksikan user untuk 'membuat akun/rekening dompet terlebih dahulu di menu Dompet'.\n\n";
     } else {
-      actionFormat += "- Mencatat transaksi baru (record_transaction).\n";
-      actionFormat += "- Memindahkan uang antar dompet (transfer_balance).\n";
-      actionFormat += "- Mengubah transaksi (update_transaction).\n";
-      actionFormat += "- Menghapus transaksi (delete_transaction).\n";
-      actionFormat += "- Menyesuaikan/koreksi saldo dompet (adjust_balance).\n";
+      actionFormat = "AKSI TERSEDIA:\n";
+      actionFormat += "Gunakan Function/Tools Calling yang tersedia untuk:\n";
+      if (draftMode) {
+        actionFormat += "- Membuat draft transaksi (draft_transaction).\n";
+        actionFormat += "- Tentukan category secara spesifik.\n";
+        actionFormat += "- Jika di struk JELAS ada petunjuk dompet/akun, otomatis isi accountId.\n";
+      } else {
+        actionFormat += "- Mencatat transaksi baru (record_transaction).\n";
+        actionFormat += "- Memindahkan uang antar dompet (transfer_balance). WAJIB sebutkan detail akun asal dan akun tujuan secara eksplisit dalam respons (contoh: 'Berhasil transfer Rp500.000 dari BCA ke BRI').\n";
+        actionFormat += "- Mengubah transaksi (update_transaction).\n";
+        actionFormat += "- Menghapus transaksi (delete_transaction).\n";
+        actionFormat += "- Menyesuaikan/koreksi saldo dompet (adjust_balance).\n";
+      }
+      actionFormat +=
+        "TENTANG GRAFIK: Jika user minta chart/grafik/diagram, sisipkan [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK] di akhir pesan.\n" +
+        `- Kategori EXPENSE prioritas: [${expCatStr}]\n` +
+        `- Kategori INCOME prioritas: [${incCatStr}]\n` +
+        "- ID Akun (accountId) WAJIB dari daftar akun RAHASIA. Jangan ngarang ID!\n\n" +
+        `${accountRule}\n\n`;
     }
-    actionFormat +=
-      "TENTANG GRAFIK: Jika user minta chart/grafik/diagram, sisipkan [SHOW_CHART:EXPENSE_MONTH] atau [SHOW_CHART:EXPENSE_WEEK] di akhir pesan.\n" +
-      `- Kategori EXPENSE prioritas: [${expCatStr}]\n` +
-      `- Kategori INCOME prioritas: [${incCatStr}]\n` +
-      "- ID Akun (accountId) WAJIB dari daftar akun RAHASIA. Jangan ngarang ID!\n\n" +
-      `${accountRule}\n\n`;
   }
 
   // ─── Chart tag berdasarkan rentang ──────────────────────
@@ -1476,6 +1675,13 @@ async function buildFinancialContext(
         "- Struktur jawaban: (1) Ringkasan kondisi keuangan, (2) Temuan penting dari data, (3) Rekomendasi konkret.\n" +
         "- Evaluasi: bandingkan pemasukan vs pengeluaran, identifikasi kategori terbesar, hari paling boros.\n" +
         "- Berikan 2-4 rekomendasi SPESIFIK berbasis DATA (bukan saran umum seperti 'hemat lebih banyak').\n" +
+        "- PERHITUNGAN PROYEKSI & TABUNGAN REALISTIS (SANGAT PENTING):\n" +
+        "  * DILARANG KERAS berasumsi bahwa pengguna dapat menabung 100% gajinya! Di dunia nyata, pengguna butuh biaya hidup.\n" +
+        "  * Hitung Sisa Uang Bersih = Gaji Bulanan - Total Pengeluaran Bulanan dari DATA.\n" +
+        "  * Jika pengeluaran belum tercatat, gunakan aturan finansial rasional: alokasi tabungan sehat adalah 20% sampai 30% dari gaji per bulan.\n" +
+        "  * Berikan 2 estimasi waktu realistis:\n" +
+        "    1. Skenario Sehat (Alokasi 20% gaji/bulan) ➔ Hitung akurat: (Target / (Gaji * 0.2)) bulan.\n" +
+        "    2. Skenario Agresif (Sisa bersih setelah pengeluaran) ➔ Hitung akurat: (Target / Sisa Uang Bersih) bulan.\n" +
         "- Jika ada per-tanggal: sebutkan hari paling boros.\n" +
         "- Jika pengeluaran > pemasukan: nyatakan dengan tegas, beri saran darurat.\n" +
         "- Jika tidak ada data: katakan jujur, minta user catat transaksi dulu.\n" +
@@ -1498,6 +1704,7 @@ async function buildFinancialContext(
         ".\n" +
         "- Jika user menanyakan tagihan/langganan/cicilan, sebutkan dari data Tagihan/Langganan Rutin Aktif di DATA.\n" +
         "- Jika user tanya nominal spesifik: WAJIB jawab dari DATA. JANGAN cuma 'lihat grafik'.\n" +
+        "- DILARANG menyebut atau menebak nominal angka saldo akhir secara eksak saat menghapus/mengubah transaksi, karena sistem yang menangani hitungannya.\n" +
         (draftMode
           ? ""
           : "- Jangan keluarkan [ACTION] jika amount/description belum lengkap.\n") +
@@ -1523,7 +1730,7 @@ async function buildFinancialContext(
         "- Sebutkan total pemasukan + pengeluaran + saldo.\n" +
         "- Jika ada data Tagihan/Langganan Rutin Aktif, sertakan juga informasinya jika relevan.\n" +
         "- Breakdown per-kategori pengeluaran dengan - list (cukup sebut nama + nominal).\n" +
-        "- Jika user minta saran/masukan: gunakan list bernomor urut (1., 2., 3., dst.) pendek, tulis nomor dan teks di baris yang sama (contoh: '1. Batasi pengeluaran...'). JANGAN menuliskan nomor list di baris terpisah atau menggunakan angka 1. untuk semua item.\n" +
+        "- Jika user minta saran/masukan atau estimasi kapan bisa membeli barang: hitung rasional (Target ÷ Alokasi Tabungan Sehat 20%-30% dari Gaji), DILARANG KERAS berasumsi user bisa menabung 100% gaji tanpa makan/hidup! Gunakan list bernomor urut (1., 2., 3., dst.) pendek.\n" +
         "- JANGAN beri saran kalau user tidak minta.\n" +
         "- Jika user tanya grafik: sertakan " +
         chartTag +
@@ -2179,9 +2386,9 @@ aiRoutes.post("/chat", async (c) => {
       c.header("Cache-Control", "no-cache");
       c.header("Connection", "keep-alive");
 
-      // Only pass tools if the user is actually intending to record a transaction
-      // This prevents the AI from hallucinating tool calls when answering questions about history
-      const hasTools = intent === "transaksi";
+      // Only pass tools if the user has at least one account and actually intends a transaction
+      // This prevents the AI from hallucinating tool calls when user has no accounts or asking history
+      const hasTools = intent === "transaksi" && accounts.length > 0;
       const chatOptions = { 
         vision: !!image, 
         tools: hasTools ? aiTools : undefined,
@@ -2290,9 +2497,14 @@ aiRoutes.post("/chat", async (c) => {
           let eventType = "transaction_created";
           if (ev.action === "update") eventType = "transaction_updated";
           if (ev.action === "delete") eventType = "transaction_deleted";
+          if (ev.action === "transfer") eventType = "transfer_created";
+          if (ev.action === "draft") eventType = "draft_created";
           if (ev.action === "add_subscription") eventType = "subscription_created";
           if (ev.action === "set_alert_threshold") eventType = "threshold_updated";
           if (ev.action === "adjust_balance") eventType = "balance_adjusted";
+          if (ev.action === "set_budget") eventType = "budget_created";
+          if (ev.action === "create_saving_goal") eventType = "goal_created";
+          if (ev.action === "allocate_saving_goal") eventType = "goal_allocated";
 
           // We must generate the text so it renders in chat and saves to history.
           if (isAiResponseEmpty) {
@@ -2302,17 +2514,33 @@ aiRoutes.post("/chat", async (c) => {
               const sign = tx.type === "INCOME" ? "+" : "-";
               const amt = Number(tx.amount || 0).toLocaleString("id-ID");
               msg = `✅ Transaksi tercatat: ${sign}Rp ${amt} — ${tx.description} (${tx.category}) ke ${tx.account}\n\n`;
+
+              // Proactive follow-up suggestion
+              const descLower = (tx.description || "").toLowerCase();
+              if (/\b(kos|wifi|indihome|biznet|netflix|spotify|youtube|listrik|pdam|air|bpjs|sewa|cicilan|langganan|pulsa)\b/i.test(descLower)) {
+                msg += `💡 *Tips Proaktif: Apakah "${tx.description}" ini ingin dicatat sebagai pengingat tagihan rutin bulanan? Jawab "Ya, catat tagihan" jika ingin dipasang pengingat.* 📅\n\n`;
+              } else if (tx.type === "EXPENSE") {
+                msg += `💡 *Tips: Ingin memasang target budget bulanan untuk kategori ${tx.category}?* 🎯\n\n`;
+              }
+            } else if (eventType === "draft_created") {
+              const tx = ev.transaction;
+              const amt = Number(tx.amount || 0).toLocaleString("id-ID");
+              msg = `📝 Draf transaksi dibuat: Rp ${amt} — ${tx.description} (${tx.category})\n\n`;
             } else if (eventType === "transaction_updated") {
               const tx = ev.transaction;
               const sign = tx.type === "INCOME" ? "+" : "-";
               const amt = Number(tx.amount || 0).toLocaleString("id-ID");
               msg = `✅ Transaksi diubah: menjadi ${sign}Rp ${amt} — ${tx.description}\n\n`;
+            } else if (eventType === "transfer_created") {
+              const tx = ev.transaction;
+              const amt = Number(tx.amount || 0).toLocaleString("id-ID");
+              msg = `✅ Berhasil transfer **Rp ${amt}** dari **${tx.fromAccount}** ke **${tx.toAccount}**.\n\n`;
             } else if (eventType === "transaction_deleted") {
-              msg = `🗑️ Transaksi berhasil dihapus.\n\n`;
+              msg = `🗑️ Transaksi/transfer berhasil dibatalkan dan saldo telah dipulihkan ke posisi semula.\n\n`;
             } else if (eventType === "subscription_created") {
               const sub = ev.subscription;
               const amt = Number(sub.amount || 0).toLocaleString("id-ID");
-              msg = `📅 Pengingat tagihan dibuat: ${sub.name} (Rp ${amt}) siklus ${sub.cycle}, jatuh tempo berikutnya: ${sub.nextDueDate.toISOString().split("T")[0]}\n\n`;
+              msg = `📅 Pengingat tagihan dibuat: ${sub.name} (Rp ${amt}) siklus ${sub.cycle}, jatuh tempo berikutnya: ${sub.nextDueDate ? new Date(sub.nextDueDate).toISOString().split("T")[0] : ""}\n\n`;
             } else if (eventType === "threshold_updated") {
               const threshold = Number(ev.threshold || 0).toLocaleString("id-ID");
               msg = `⚙️ Batas peringatan pengeluaran besar berhasil diubah menjadi **Rp ${threshold}**.\n\n`;
@@ -2320,16 +2548,42 @@ aiRoutes.post("/chat", async (c) => {
               const acc = ev.account;
               const amt = Number(acc.balance || 0).toLocaleString("id-ID");
               msg = `✅ Saldo **${acc.name}** telah disesuaikan menjadi **Rp ${amt}**.\n\n`;
+            } else if (eventType === "budget_created") {
+              const b = ev.budget;
+              const amt = Number(b.amount || 0).toLocaleString("id-ID");
+              const catName = b.category?.name || "Kategori";
+              msg = `🎯 Target budget dibuat: ${catName} — Rp ${amt} (${b.period || "MONTHLY"})\n\n`;
+            } else if (eventType === "goal_created") {
+              const g = ev.goal;
+              const amt = Number(g.targetAmount || 0).toLocaleString("id-ID");
+              msg = `🎯 Target tabungan impian dibuat: **${g.name}** dengan target **Rp ${amt}**! 🚀\n\n`;
+            } else if (eventType === "goal_allocated") {
+              const g = ev.goal;
+              const dep = Number(ev.depositedAmount || 0).toLocaleString("id-ID");
+              const cur = Number(g.currentAmount || 0).toLocaleString("id-ID");
+              const tar = Number(g.targetAmount || 0).toLocaleString("id-ID");
+              msg = `💰 Berhasil menyetor **Rp ${dep}** ke **${g.name}**! Terkumpul **Rp ${cur} / Rp ${tar}**. 🎉\n\n`;
             }
 
-            fullResponse += msg;
-            await s.write(`data: ${JSON.stringify({ type: "token", content: msg })}\n\n`);
+            if (msg) {
+              fullResponse += msg;
+              await s.write(`data: ${JSON.stringify({ type: "token", content: msg })}\n\n`);
+            }
           }
 
           await s.write(
-            `data: ${JSON.stringify({ type: eventType, transaction: ev.transaction, account: ev.account })}\n\n`,
+            `data: ${JSON.stringify({ type: eventType, transaction: ev.transaction, account: ev.account, subscription: ev.subscription, budget: ev.budget, goal: ev.goal })}\n\n`,
           );
         }
+      }
+
+      // Safeguard: guarantee response text is never empty
+      if (!fullResponse.trim()) {
+        const fallbackMsg = "Maaf, terjadi kendala saat memproses balasan. Silakan coba kirim ulang pesan Anda.";
+        fullResponse = fallbackMsg;
+        await s.write(
+          `data: ${JSON.stringify({ type: "token", content: fallbackMsg })}\n\n`
+        );
       }
 
       if (fullResponse.trim()) {

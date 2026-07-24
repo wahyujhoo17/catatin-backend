@@ -419,10 +419,16 @@ class AIProviderManager {
                   const idx = toolCall.index;
                   if (!fullToolCalls[idx]) {
                     fullToolCalls[idx] = {
-                      id: toolCall.id,
-                      type: toolCall.type,
+                      id: toolCall.id || "",
+                      type: toolCall.type || "function",
                       function: { name: toolCall.function?.name || "", arguments: "" }
                     };
+                  }
+                  if (toolCall.id && !fullToolCalls[idx].id) {
+                    fullToolCalls[idx].id = toolCall.id;
+                  }
+                  if (toolCall.function?.name) {
+                    fullToolCalls[idx].function.name = toolCall.function.name;
                   }
                   if (toolCall.function?.arguments) {
                     fullToolCalls[idx].function.arguments += toolCall.function.arguments;

@@ -134,6 +134,7 @@ transactions.post("/", async (c) => {
 });
 
 // ─── UPDATE TRANSACTION ───────────────────────────────────────
+// ─── UPDATE TRANSACTION ───────────────────────────────────────
 transactions.put("/:id", async (c) => {
   const { userId } = c.get("user");
   const id = c.req.param("id");
@@ -144,6 +145,19 @@ transactions.put("/:id", async (c) => {
   });
   if (!existing) return c.json({ error: "Transaksi tidak ditemukan" }, 404);
 
+  // Cari linked transaction jika ini bagian dari transfer
+  let peerTx = null;
+  const wherePeer: any[] = [{ linkedTransactionId: existing.id }];
+  if (existing.linkedTransactionId) {
+    wherePeer.push({ id: existing.linkedTransactionId });
+  }
+
+  if (wherePeer.length > 0) {
+    peerTx = await prisma.transaction.findFirst({
+      where: { userId, OR: wherePeer }
+    });
+  }
+
   const oldDelta = existing.type === "INCOME" || existing.type === "DEBT" ? existing.amount : -existing.amount;
   const newType = body.type ?? existing.type;
   const newAmount = body.amount ?? existing.amount;
@@ -152,40 +166,86 @@ transactions.put("/:id", async (c) => {
 
   let transaction;
   await prisma.$transaction(async (tx) => {
+    // 1. Revert Old Balances
     if (existing.accountId) {
       await tx.account.update({
         where: { id: existing.accountId },
         data: { balance: { decrement: oldDelta } }
       });
     }
+    // Revert target customer debt if applicable
+    if (existing.customerId && existing.type === "DEBT") {
+      await tx.customer.update({
+        where: { id: existing.customerId },
+        data: { debt: { decrement: existing.amount } }
+      });
+    }
 
+    if (peerTx) {
+      const peerOldDelta = peerTx.type === "INCOME" || peerTx.type === "DEBT" ? peerTx.amount : -peerTx.amount;
+      if (peerTx.accountId) {
+        await tx.account.update({
+          where: { id: peerTx.accountId },
+          data: { balance: { decrement: peerOldDelta } }
+        });
+      }
+    }
+
+    // 2. Apply New Balances
     if (newAccountId) {
       await tx.account.update({
         where: { id: newAccountId },
         data: { balance: { increment: newDelta } }
       });
     }
+    // Update target customer debt if applicable
+    if ((body.customerId || existing.customerId) && newType === "DEBT") {
+      const targetCustomerId = body.customerId !== undefined ? body.customerId : existing.customerId;
+      if (targetCustomerId) {
+        await tx.customer.update({
+          where: { id: targetCustomerId },
+          data: { debt: { increment: newAmount } }
+        });
+      }
+    }
 
+    if (peerTx) {
+      const peerNewDelta = peerTx.type === "INCOME" || peerTx.type === "DEBT" ? newAmount : -newAmount;
+      if (peerTx.accountId) {
+        await tx.account.update({
+          where: { id: peerTx.accountId },
+          data: { balance: { increment: peerNewDelta } }
+        });
+      }
+    }
+
+    // 3. Update Transaction Records
     transaction = await tx.transaction.update({
       where: { id },
       data: {
         type: newType,
         amount: newAmount,
-        description:
-          body.description !== undefined
-            ? body.description
-            : existing.description,
+        description: body.description !== undefined ? body.description : existing.description,
         note: body.note !== undefined ? body.note : existing.note,
         method: body.method !== undefined ? body.method : existing.method,
         source: body.source !== undefined ? body.source : existing.source,
         date: body.date ? new Date(body.date) : existing.date,
         accountId: newAccountId,
-        categoryId:
-          body.categoryId !== undefined ? body.categoryId : existing.categoryId,
-        customerId:
-          body.customerId !== undefined ? body.customerId : existing.customerId,
+        categoryId: body.categoryId !== undefined ? body.categoryId : existing.categoryId,
+        customerId: body.customerId !== undefined ? body.customerId : existing.customerId,
       },
     });
+
+    if (peerTx) {
+      await tx.transaction.update({
+        where: { id: peerTx.id },
+        data: {
+          amount: newAmount,
+          description: body.description !== undefined ? body.description : peerTx.description,
+          date: body.date ? new Date(body.date) : peerTx.date,
+        }
+      });
+    }
   });
 
   try {
@@ -207,15 +267,44 @@ transactions.delete("/:id", async (c) => {
   });
   if (!tx) return c.json({ error: "Transaksi tidak ditemukan" }, 404);
 
-  const oldDelta = tx.type === "INCOME" || tx.type === "DEBT" ? tx.amount : -tx.amount;
-  await prisma.$transaction(async (prismaTx) => {
-    if (tx.accountId) {
-      await prismaTx.account.update({
-        where: { id: tx.accountId },
-        data: { balance: { decrement: oldDelta } }
-      });
+  // Cari semua transaksi terkait (linkedTransactionId, splitGroupId, atau linkedFrom)
+  const whereConditions: any[] = [
+    { id },
+    { linkedTransactionId: id }
+  ];
+  if (tx.linkedTransactionId) {
+    whereConditions.push({ id: tx.linkedTransactionId });
+  }
+  if (tx.splitGroupId) {
+    whereConditions.push({ splitGroupId: tx.splitGroupId });
+  }
+
+  const relatedTxs = await prisma.transaction.findMany({
+    where: {
+      userId,
+      OR: whereConditions
     }
-    await prismaTx.transaction.delete({ where: { id } });
+  });
+
+  await prisma.$transaction(async (prismaTx) => {
+    for (const item of relatedTxs) {
+      // Revert account balance
+      if (item.accountId) {
+        const delta = item.type === "INCOME" || item.type === "DEBT" ? -item.amount : item.amount;
+        await prismaTx.account.update({
+          where: { id: item.accountId },
+          data: { balance: { increment: delta } },
+        });
+      }
+      // Revert customer debt if applicable
+      if (item.customerId && item.type === "DEBT") {
+        await prismaTx.customer.update({
+          where: { id: item.customerId },
+          data: { debt: { decrement: item.amount } }
+        });
+      }
+      await prismaTx.transaction.delete({ where: { id: item.id } });
+    }
   });
 
   try {

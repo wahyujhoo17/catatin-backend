@@ -15,32 +15,35 @@ enum WorkspaceMode {
 }
 
 model User {
-  id              String   @id @default(cuid())
-  email           String   @unique
-  googleId        String?  @unique
-  phone           String?  @unique
-  password        String?
-  name            String
-  mode            WorkspaceMode?
-  avatar          String?
-  customAiConfig  Json?
-  aiInsight       String?
+  id                 String         @id @default(cuid())
+  email              String         @unique
+  googleId           String?        @unique
+  phone              String?        @unique
+  password           String?
+  name               String
+  mode               WorkspaceMode?
+  avatar             String?
+  customAiConfig     Json?
+  aiInsight          String?
   aiInsightUpdatedAt DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
 
   // Relations
-  otpCodes        OtpCode[]
-  sessions        Session[]
-  accounts        Account[]
-  transactions    Transaction[]
-  categories      Category[]
-  products        Product[]
-  customers       Customer[]
-  aiMessages      AiMessage[]
-  aiConversations AiConversation[]
-  deviceTokens    DeviceToken[]
-  subscriptions   Subscription[]
+  otpCodes         OtpCode[]
+  sessions         Session[]
+  accounts         Account[]
+  transactions     Transaction[]
+  categories       Category[]
+  products         Product[]
+  customers        Customer[]
+  aiMessages       AiMessage[]
+  aiConversations  AiConversation[]
+  deviceTokens     DeviceToken[]
+  subscriptions    Subscription[]
+  budgets          Budget[]
+  investmentAssets InvestmentAsset[]
+  savingGoals      SavingGoal[]
 }
 
 model OtpCode {
@@ -48,7 +51,7 @@ model OtpCode {
   userId    String
   user      User     @relation(fields: [userId], references: [id])
   code      String
-  type      String   // REGISTER, LOGIN, FORGOT_PASSWORD
+  type      String // REGISTER, LOGIN, FORGOT_PASSWORD
   expiresAt DateTime
   used      Boolean  @default(false)
   createdAt DateTime @default(now())
@@ -75,6 +78,7 @@ enum AccountType {
   CASH
   BANK
   E_WALLET
+  INVESTMENT
 }
 
 model Account {
@@ -83,13 +87,15 @@ model Account {
   user      User        @relation(fields: [userId], references: [id])
   name      String
   type      AccountType @default(CASH)
+  currency  String      @default("IDR")
   balance   Float       @default(0)
   icon      String?
   color     String?
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
-  transactions Transaction[]
+  transactions     Transaction[]
+  investmentAssets InvestmentAsset[]
 
   @@index([userId])
 }
@@ -104,25 +110,32 @@ enum TransactionType {
 }
 
 model Transaction {
-  id          String          @id @default(cuid())
-  userId      String
-  user        User            @relation(fields: [userId], references: [id])
-  accountId   String?
-  account     Account?        @relation(fields: [accountId], references: [id])
-  categoryId  String?
-  category    Category?       @relation(fields: [categoryId], references: [id])
-  customerId  String?
-  customer    Customer?       @relation(fields: [customerId], references: [id])
-  type        TransactionType
-  amount      Float
-  description String?
-  note        String?
-  method      String?         // cash, debit_card, credit_card, e_wallet
-  source      String?         // CHAT, SCAN, MANUAL
-  date        DateTime        @default(now())
-  isTransfer  Boolean         @default(false)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id                  String          @id @default(cuid())
+  userId              String
+  user                User            @relation(fields: [userId], references: [id])
+  accountId           String?
+  account             Account?        @relation(fields: [accountId], references: [id])
+  categoryId          String?
+  category            Category?       @relation(fields: [categoryId], references: [id])
+  customerId          String?
+  customer            Customer?       @relation(fields: [customerId], references: [id])
+  type                TransactionType
+  amount              Float
+  currency            String          @default("IDR")
+  exchangeRate        Float           @default(1.0)
+  description         String?
+  note                String?
+  method              String? // cash, debit_card, credit_card, e_wallet
+  source              String? // CHAT, SCAN, MANUAL
+  date                DateTime        @default(now())
+  isTransfer          Boolean         @default(false)
+  receiptUrl          String?
+  splitGroupId        String?
+  linkedTransactionId String?
+  linkedTransaction   Transaction?    @relation("LinkedTrans", fields: [linkedTransactionId], references: [id])
+  linkedFrom          Transaction[]   @relation("LinkedTrans")
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   @@index([userId, date])
   @@index([userId, categoryId])
@@ -132,18 +145,19 @@ model Transaction {
 // ─── CATEGORIES ─────────────────────────────────────────────────
 
 model Category {
-  id        String   @id @default(cuid())
+  id        String          @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User            @relation(fields: [userId], references: [id])
   name      String
   icon      String?
   color     String?
   type      TransactionType // INCOME or EXPENSE
-  isDefault Boolean  @default(false)
-  order     Int      @default(0)
-  createdAt DateTime @default(now())
+  isDefault Boolean         @default(false)
+  order     Int             @default(0)
+  createdAt DateTime        @default(now())
 
   transactions Transaction[]
+  budgets      Budget[]
 
   @@unique([userId, name])
   @@index([userId, type])
@@ -152,20 +166,20 @@ model Category {
 // ─── POS: PRODUCTS ──────────────────────────────────────────────
 
 model Product {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
-  name        String
-  price       Float
-  costPrice   Float?
-  category    String?
-  unit        String   @default("pcs")
-  stock       Int      @default(0)
-  minStock    Int      @default(5)
-  image       String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  price     Float
+  costPrice Float?
+  category  String?
+  unit      String   @default("pcs")
+  stock     Int      @default(0)
+  minStock  Int      @default(5)
+  image     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([userId, isActive])
@@ -197,9 +211,9 @@ model Subscription {
   id          String   @id @default(cuid())
   userId      String
   user        User     @relation(fields: [userId], references: [id])
-  name        String   // "Netflix", "Bayar Kos"
+  name        String // "Netflix", "Bayar Kos"
   amount      Float
-  cycle       String   // "MONTHLY", "YEARLY", "WEEKLY"
+  cycle       String // "MONTHLY", "YEARLY", "WEEKLY"
   nextDueDate DateTime
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
@@ -216,7 +230,7 @@ model AiConversation {
   userId    String
   user      User     @relation(fields: [userId], references: [id])
   title     String?
-  mode      String?  // POS or PERSONAL
+  mode      String? // POS or PERSONAL
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -231,9 +245,9 @@ model AiMessage {
   conversation   AiConversation @relation(fields: [conversationId], references: [id])
   userId         String
   user           User           @relation(fields: [userId], references: [id])
-  role           String         // USER, ASSISTANT, SYSTEM
+  role           String // USER, ASSISTANT, SYSTEM
   content        String
-  metadata       Json?          // Parsed transaction data, etc.
+  metadata       Json? // Parsed transaction data, etc.
   createdAt      DateTime       @default(now())
 
   @@index([conversationId])
@@ -250,6 +264,59 @@ model DeviceToken {
   platform  String   @default("web") // web, ios, android
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ─── BUDGETS ───────────────────────────────────────────────────
+
+model Budget {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id])
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+  amount     Float
+  period     String    @default("MONTHLY") // MONTHLY, WEEKLY, YEARLY
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+// ─── INVESTMENTS ───────────────────────────────────────────────
+
+model InvestmentAsset {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  accountId    String
+  account      Account  @relation(fields: [accountId], references: [id])
+  symbol       String // e.g. BBCA, BTC, Gold
+  quantity     Float
+  averagePrice Float
+  currentPrice Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId, accountId])
+}
+
+// ─── SAVING GOALS & WISHLIST ───────────────────────────────────
+
+model SavingGoal {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String    // e.g. "Beli Laptop", "DP Rumah", "Dana Darurat"
+  targetAmount  Float
+  currentAmount Float     @default(0)
+  targetDate    DateTime?
+  icon          String?   @default("target")
+  color         String?   @default("#4f378a")
+  isCompleted   Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([userId])
 }

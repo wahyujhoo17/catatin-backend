@@ -115,6 +115,68 @@ Instruksi PENTING:
     }
   });
 
+  // Processor untuk Peringatan Budget Melebihi Batas (DAILY, WEEKLY, MONTHLY, YEARLY)
+  cronQueue.process("budget-limit-exceeded-alert", async (job) => {
+    const {
+      userId,
+      userName,
+      period,
+      categoryName,
+      budgetAmount,
+      currentSpent,
+      latestTxAmount,
+      latestDescription,
+    } = job.data;
+
+    console.log(
+      `[Worker:Cron] Memproses budget-limit-exceeded-alert #${job.id} untuk user ${userId}`
+    );
+
+    const periodLabelMap: Record<string, string> = {
+      DAILY: "Harian",
+      WEEKLY: "Mingguan",
+      MONTHLY: "Bulanan",
+      YEARLY: "Tahunan",
+    };
+    const periodStr = periodLabelMap[period] || "Bulanan";
+
+    const prompt = `Kamu adalah Catatin AI, asisten keuangan pintar, ekspresif, dan tidak ragu menegur pengguna.
+Tugasmu: Tegur ${userName || "User"} karena total pengeluaran ${periodStr} untuk "${categoryName}" SUDAH MELEBIHI TARGET BUDGET!
+Detail:
+- Periode Budget: ${periodStr}
+- Target Budget: Rp ${Number(budgetAmount).toLocaleString("id-ID")}
+- Total Terpakai Saat Ini: Rp ${Number(currentSpent).toLocaleString("id-ID")}
+- Transaksi Terakhir: Rp ${Number(latestTxAmount).toLocaleString("id-ID")} ("${latestDescription}")
+
+Instruksi:
+- Buat Push Notification (maksimal 120 huruf) yang langsung menegur, lucu/sarkas/mengingatkan dengan gaya santai & gaul.
+- Gunakan bahasa yang BERVARIASI (misal: "Waduh", "Woy", "Awas sultan", "Rem woi!", "Overbudget bor!").
+- JANGAN kaku seperti robot bank.
+- Langsung to the point, hanya balas teks notifikasinya saja tanpa tanda kutip.`;
+
+    try {
+      const aiResponse = await aiManager.chat([{ role: "user", content: prompt }]);
+      const messageText = aiResponse.content?.trim() || "";
+
+      if (messageText) {
+        console.log(
+          `[Worker:Cron] Mengirim peringatan over-budget ke ${userName}: ${messageText}`
+        );
+        await sendPushNotification({
+          userIds: [userId],
+          title: `Over Budget ${periodStr}! ⚠️`,
+          body: messageText,
+          clickAction: "/dashboard",
+        });
+      }
+    } catch (err: any) {
+      console.error(
+        `[Worker:Cron] Gagal budget-limit-exceeded-alert untuk user ${userId}:`,
+        err.message
+      );
+    }
+  });
+
   // Processor untuk Pengingat Tagihan (Subscription Reminder)
   cronQueue.process("daily-subscription-reminder", async (job) => {
     console.log(`[Worker:Cron] Memproses daily-subscription-reminder #${job.id}`);

@@ -295,13 +295,13 @@ export const aiTools = [
     type: "function",
     function: {
       name: "set_budget",
-      description: "Buat atau ubah target budget bulanan/mingguan untuk suatu kategori pengeluaran",
+      description: "Buat atau ubah target budget harian/mingguan/bulanan/tahunan untuk suatu kategori pengeluaran",
       parameters: {
         type: "object",
         properties: {
           category: { type: "string", description: "Nama kategori pengeluaran" },
           amount: { type: "number", description: "Nominal budget (angka tanpa titik/koma)" },
-          period: { type: "string", enum: ["MONTHLY", "WEEKLY", "YEARLY"], description: "Periode budget" }
+          period: { type: "string", enum: ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"], description: "Periode budget" }
         },
         required: ["category", "amount", "period"]
       }
@@ -1458,13 +1458,16 @@ export async function buildFinancialContext(
 
   // Budget progress context for AI
   if (intent !== "non_finansial" && d.budgets && d.budgets.length > 0) {
-    const { startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear } = require("date-fns");
+    const { startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear, startOfDay, endOfDay } = require("date-fns");
     const budgetList = await Promise.all(
       (d.budgets as any[]).map(async (b) => {
         let startDt: Date;
         let endDt: Date;
         const nowVal = new Date();
-        if (b.period === "WEEKLY") {
+        if (b.period === "DAILY") {
+          startDt = startOfDay(nowVal);
+          endDt = endOfDay(nowVal);
+        } else if (b.period === "WEEKLY") {
           startDt = startOfWeek(nowVal, { weekStartsOn: 1 });
           endDt = endOfWeek(nowVal, { weekStartsOn: 1 });
         } else if (b.period === "YEARLY") {

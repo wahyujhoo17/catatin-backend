@@ -3,7 +3,7 @@ import prisma from "../lib/prisma";
 import { authMiddleware } from "../middleware/auth";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear } from "date-fns";
+import { startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear, startOfDay, endOfDay } from "date-fns";
 
 const budgets = new Hono();
 budgets.use("*", authMiddleware);
@@ -12,7 +12,7 @@ budgets.use("*", authMiddleware);
 const budgetSchema = z.object({
   categoryId: z.string().optional(),
   amount: z.number().positive(),
-  period: z.enum(["MONTHLY", "WEEKLY", "YEARLY"]).default("MONTHLY"),
+  period: z.enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]).default("MONTHLY"),
 });
 
 // GET /api/budgets - Get active budgets and their progress (spending)
@@ -34,6 +34,10 @@ budgets.get("/", async (c) => {
       let endDate: Date;
 
       switch (budget.period) {
+        case "DAILY":
+          startDate = startOfDay(now);
+          endDate = endOfDay(now);
+          break;
         case "WEEKLY":
           startDate = startOfWeek(now, { weekStartsOn: 1 }); // Monday
           endDate = endOfWeek(now, { weekStartsOn: 1 });

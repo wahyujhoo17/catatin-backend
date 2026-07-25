@@ -1,6 +1,7 @@
 import prisma from "../prisma";
 import { clearUserAiCache } from "../redis";
 import { cronQueue } from "../queue";
+import { checkAndTriggerBudgetAlerts } from "../../services/budgetAlert";
 
 export const processTransactionActions = async (toolCalls: any[], userId: string, accounts: any[]) => {
   const processedEvents: any[] = [];
@@ -698,20 +699,11 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           return created;
         });
 
-        // Trigger real-time alert jika pengeluaran > threshold
+        // Trigger real-time & cumulative budget alerts
         if (String(type).toUpperCase() === "EXPENSE") {
-          const userObj = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, customAiConfig: true } });
-          const config = userObj?.customAiConfig as any;
-          const threshold = config?.alertThreshold ?? 500000;
-
-          if (amount >= threshold) {
-            await cronQueue.add("realtime-ai-alert", {
-              userId,
-              userName: userObj?.name || "User",
-              amount,
-              description
-            });
-          }
+          checkAndTriggerBudgetAlerts(userId, amount, description || "Pengeluaran", categoryId).catch((err) => {
+            console.error("[BudgetAlert] Error in async AI alert trigger:", err.message);
+          });
         }
 
         processedEvents.push({

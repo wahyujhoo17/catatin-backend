@@ -3,6 +3,7 @@ import prisma from "../lib/prisma";
 import { authMiddleware } from "../middleware/auth";
 import { createTransactionSchema } from "../validators";
 import { clearUserAiCache } from "../lib/redis";
+import { checkAndTriggerBudgetAlerts } from "../services/budgetAlert";
 
 const transactions = new Hono();
 transactions.use("*", authMiddleware);
@@ -121,6 +122,13 @@ transactions.post("/", async (c) => {
     await prisma.account.update({
       where: { id: accountId },
       data: { balance: { increment: delta } },
+    });
+  }
+
+  // Trigger alert budget real-time jika tipe transaksi EXPENSE
+  if (type === "EXPENSE") {
+    checkAndTriggerBudgetAlerts(userId, amount, description || "Pengeluaran", categoryId).catch((err) => {
+      console.error("[BudgetAlert] Error in async alert trigger:", err.message);
     });
   }
 

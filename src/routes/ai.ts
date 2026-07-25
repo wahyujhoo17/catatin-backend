@@ -2007,10 +2007,13 @@ aiRoutes.post("/chat", async (c) => {
   // Handle draft reply context
   let effectiveMessage = message;
   const lastBotMessage = history && history.length > 0 ? history[history.length - 1] : null;
-  if (lastBotMessage?.role === "assistant" && lastBotMessage.content.includes("[ASK_ACCOUNT:")) {
-    const lastUserMsg = [...history].reverse().find((m: any) => m.role === "user");
+  const isBotAskAccount = (lastBotMessage?.type === "bot" && lastBotMessage?.text?.includes("[ASK_ACCOUNT:")) || 
+                          (lastBotMessage?.role === "assistant" && lastBotMessage?.content?.includes("[ASK_ACCOUNT:"));
+  if (isBotAskAccount) {
+    const lastUserMsg = [...history].reverse().find((m: any) => m.type === "user" || m.role === "user");
     if (lastUserMsg) {
-      effectiveMessage = `${lastUserMsg.content} menggunakan akun ${message}`;
+      const userText = lastUserMsg.text || lastUserMsg.content;
+      effectiveMessage = `${userText} menggunakan akun ${message}`;
       console.log(`[AI] Draft reply detected. Effective message: "${effectiveMessage}"`);
     }
   }

@@ -87,7 +87,7 @@ export async function sendPushNotificationDirect(
   const message = {
     webpush: {
       fcmOptions: {
-        link: payload.clickAction || "/dashboard",
+        link: "/notifications?openLatest=1",
       },
       notification: {
         title: payload.title,

@@ -158,7 +158,7 @@ export const aiTools = [
           amount: { type: "number", description: "Nominal angka tanpa titik/koma" },
           description: { type: "string", description: "Deskripsi transaksi" },
           category: { type: "string", description: "Kategori (contoh: Makanan, Gaji, dll)" },
-          accountId: { type: "string", description: "ID akun yang digunakan (JANGAN DIISI jika tidak ada dompet yang cocok di data RAHASIA)" }
+          accountId: { type: "string", description: "ID akun yang digunakan. JANGAN PERNAH MENGARANG! KOSONGKAN/JANGAN DIISI jika user tidak menyebutkan nama dompet/akun secara eksplisit." }
         },
         required: ["type", "amount", "description", "category"]
       }
@@ -662,8 +662,10 @@ CATEGORY (pilih salah satu):
 - EXPENSE: Makanan, Minuman, Transportasi, Belanja, Hiburan, Tagihan, Kesehatan, Pendidikan, Pakaian, Rumah Tangga, Donasi, Langganan, Perjalanan, Transfer, Lainnya
 - INCOME: Gaji, Bonus, Freelance, Investasi, Hadiah, Refund, Lainnya
 
-ACCOUNT: jika user sebut nama akun (${accountList}), masukkan ke accountName.
-Jika transaksi tapi tidak sebut akun, set needsAccount: true.
+ACCOUNT:
+JANGAN PERNAH MENGARANG NAMA AKUN/DOMPET! 
+Jika user SECARA EKSPLISIT menyebut nama akun/dompet yang cocok dengan daftar ini (${accountList}), masukkan ke accountName.
+JIKA USER TIDAK MENYEBUT NAMA AKUN (misal: "beli salon 500rb", "makan 20rb"), KAMU WAJIB MENGOSONGKAN accountName dan WAJIB mengisi needsAccount: true.
 Jika BUKAN transaksi (query, sapaan, tanya saldo, dll): {"isTransaction":false}
 
 OUTPUT: HANYA JSON, tanpa markdown, tanpa \`\`\`, tanpa penjelasan.`;
@@ -1537,12 +1539,12 @@ export async function buildFinancialContext(
   // ─── Account rule (hanya saat ACTION mode) ──────────────
   let accountRule = "";
   if (needFullContext) {
+    const accOptions = accounts.map((a) => a.name).join(",");
     if (accounts.length === 0) {
       accountRule = "⚠️ Belum ada akun. JANGAN catat transaksi. Suruh user tambah akun dulu.\n";
     } else if (accounts.length === 1) {
       accountRule = "✅ 1 akun: " + accounts[0].name + '. Auto-pakai accountId="' + accounts[0].id + '" untuk semua transaksi.\n';
     } else {
-      const accOptions = accounts.map((a) => a.name).join(",");
       accountRule = `📋 ${accounts.length} akun tersedia: ${accOptions}.\n`;
       if (draftMode) {
         accountRule += `ATURAN DRAFT (WAJIB DIPATUHIN):\n` +
@@ -1558,10 +1560,10 @@ export async function buildFinancialContext(
       accountRule +=
         `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
         `1. Cek apakah user MEMINTA transaksi baru di pesan terakhirmya ATAU meminta pengingat tagihan.\n` +
-        `2. JIKA YA: Panggil tool record_transaction, transfer_balance, atau add_subscription. Jika ada BANYAK aksi, panggil tool BERKALI-KALI secara paralel.\n` +
-        `   PENTING: Gunakan ID akun yang persis sama dengan RAHASIA di bawah. JANGAN mengarang ID.\n` +
-        `3. JIKA AKUN TIDAK TERDAFTAR (contoh: user pakai 'Tunai' tapi tidak ada di daftar): JANGAN panggil tool apapun. Balas dengan teks meminta user memilih akun yang tersedia.\n` +
-        `4. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
+        `2. JIKA YA & NAMA DOMPET DISEBUT EKSPLISIT: Panggil tool record_transaction, transfer_balance, atau add_subscription secara paralel. Gunakan ID dompet yang persis sama dengan RAHASIA di bawah.\n` +
+        `3. JIKA NAMA DOMPET TIDAK DISEBUT SAMA SEKALI: JANGAN panggil tool apapun! WAJIB balas dengan teks menanyakan dompet mana yang akan digunakan DAN wajib tambahkan format [ASK_ACCOUNT:${accOptions}] di akhir balasanmu.\n` +
+        `4. JIKA NAMA DOMPET TIDAK TERDAFTAR: JANGAN panggil tool apapun. Balas meminta user memilih akun yang tersedia DAN tambahkan format [ASK_ACCOUNT:${accOptions}] di akhir balasanmu.\n` +
+        `5. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
         `5. Jika mencatat tagihan (add_subscription), pilih cycle yang tepat dan hitung nextDueDate terdekat yang masuk akal.\n` +
         `6. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.\n` +
         `7. PENYESUAIAN SALDO: Jika user minta "sesuaikan/atur/ubah saldo" ke nominal tertentu, WAJIB gunakan tool adjust_balance. JANGAN bilang "sudah disesuaikan" jika belum memanggil tool adjust_balance.\n` +
@@ -2024,6 +2026,49 @@ aiRoutes.post("/chat", async (c) => {
   const txClass = hasPotentialAmount(effectiveMessage)
     ? await classifyTransactionMessage(effectiveMessage, accounts)
     : null;
+
+  // ─── Fast Path: Missing Account ──
+  // Jika LLM classifier yakin ini transaksi tapi user tidak menyebut akun, langsung minta akun.
+  // Ini mencegah LLM utama mengarang akun berdasarkan histori chat.
+  if (
+    txClass?.isTransaction &&
+    txClass.needsAccount &&
+    !txClass.accountId &&
+    accounts.length > 0 &&
+    !isBalanceAdjustmentRequest(effectiveMessage)
+  ) {
+    console.log(`[AI] Fast path: Missing account for transaction. Asking user.`);
+    return stream(c, async (s) => {
+      c.header("Content-Type", "text/event-stream");
+      c.header("Cache-Control", "no-cache");
+      c.header("Connection", "keep-alive");
+
+      const accOptions = accounts.map((a) => a.name).join(",");
+      const msg = `Silakan pilih dompet/akun mana yang digunakan untuk transaksi ini.\n\n[ASK_ACCOUNT:${accOptions}]`;
+      
+      await s.write(`data: ${JSON.stringify({ type: "token", content: msg })}\n\n`);
+      await s.write("data: [DONE]\n\n");
+
+      try {
+        let convId = conversationId;
+        if (!convId) {
+          const title = message.trim().slice(0, 60) + (message.length > 60 ? "…" : "");
+          const conv = await prisma.aiConversation.create({
+            data: { userId: user.userId, title, mode: "chat" },
+          });
+          convId = conv.id;
+        }
+        await prisma.aiMessage.create({
+          data: { conversationId: convId, userId: user.userId, role: "user", content: message },
+        });
+        await prisma.aiMessage.create({
+          data: { conversationId: convId, userId: user.userId, role: "assistant", content: msg },
+        });
+      } catch (err) {
+        console.error("[AI] Error saving missing account chat history:", err);
+      }
+    });
+  }
 
   // ─── Path A: Complete transaction → save langsung, tanpa AI ──
   // Exclude balance adjustment requests — they need the AI + adjust_balance tool
@@ -2564,11 +2609,14 @@ aiRoutes.post("/chat", async (c) => {
           if (ev.action === "set_budget") eventType = "budget_created";
           if (ev.action === "create_saving_goal") eventType = "goal_created";
           if (ev.action === "allocate_saving_goal") eventType = "goal_allocated";
+          if (ev.action === "error") eventType = "tool_error";
 
           // We must generate the text so it renders in chat and saves to history.
-          if (isAiResponseEmpty) {
+          if (isAiResponseEmpty || eventType === "tool_error") {
             let msg = "";
-            if (eventType === "transaction_created") {
+            if (eventType === "tool_error") {
+              msg = `❌ **Gagal:** ${ev.message}\n\n`;
+            } else if (eventType === "transaction_created") {
               const tx = ev.transaction;
               const sign = tx.type === "INCOME" ? "+" : "-";
               const amt = Number(tx.amount || 0).toLocaleString("id-ID");

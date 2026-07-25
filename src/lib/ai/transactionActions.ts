@@ -647,10 +647,15 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
             console.warn(`[AI] accountId ${accountId} tidak valid, abaikan`);
           }
         }
-        // Auto-assign ke akun pertama (utama) jika AI tidak menyebutkan dompet
-        // KECUALI untuk draft_transaction, biarkan kosong agar user memilih sendiri.
-        if (!finalAccountId && accounts.length > 0 && actionType !== "draft_transaction") {
-          finalAccountId = accounts[0].id;
+        // Cegah auto-assign akun! Jika AI tidak menyebutkan dompet (kecuali draft_transaction), paksa gagal agar AI bertanya.
+        if (!finalAccountId && actionType !== "draft_transaction") {
+          console.warn(`[AI] record_transaction gagal karena accountId kosong. Harap tanya user.`);
+          // Tambahkan ke output agar LLM tahu bahwa dia harus bertanya
+          processedEvents.push({
+            action: "error",
+            message: `Gagal mencatat transaksi "${description}": accountId kosong. Kamu WAJIB bertanya kepada user dompet mana yang digunakan beserta [ASK_ACCOUNT:...]`
+          });
+          continue;
         }
 
         // Cari atau buat kategori

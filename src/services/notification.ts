@@ -86,6 +86,9 @@ export async function sendPushNotificationDirect(
   // karena Firebase FCM akan menampilkan notifikasi ganda).
     const message = {
       webpush: {
+        fcmOptions: {
+          link: "/notifications?openLatest=1",
+        },
         notification: {
           title: payload.title,
           body: payload.body,

@@ -42,8 +42,35 @@ model User {
   deviceTokens     DeviceToken[]
   subscriptions    Subscription[]
   budgets          Budget[]
-  investmentAssets InvestmentAsset[]
-  savingGoals      SavingGoal[]
+  investmentAssets  InvestmentAsset[]
+  savingGoals       SavingGoal[]
+  notifications     Notification[]
+}
+
+// ─── NOTIFICATION TYPES ─────────────────────────────────────────
+
+enum NotificationType {
+  EXPENSE_ALERT
+  BUDGET_EXCEEDED
+  SUBSCRIPTION_REMINDER
+  DAILY_RECAP
+  ADMIN_BROADCAST
+  SYSTEM
+}
+
+model Notification {
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        NotificationType @default(SYSTEM)
+  title       String
+  body        String
+  isRead      Boolean          @default(false)
+  clickAction String?          @default("/dashboard")
+  createdAt   DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
 }
 
 model OtpCode {

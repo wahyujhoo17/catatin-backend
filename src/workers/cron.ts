@@ -67,6 +67,7 @@ Instruksi PENTING:
             title: "Rekap Pengeluaran Hari Ini 💸",
             body: messageText,
             clickAction: "/dashboard",
+            type: "DAILY_RECAP",
           });
         }
       } catch (err: any) {
@@ -108,6 +109,7 @@ Instruksi PENTING:
           title: "Peringatan Pengeluaran Besar 🚨",
           body: messageText,
           clickAction: "/dashboard",
+          type: "EXPENSE_ALERT",
         });
       }
     } catch (err: any) {
@@ -167,6 +169,7 @@ Instruksi:
           title: `Over Budget ${periodStr}! ⚠️`,
           body: messageText,
           clickAction: "/dashboard",
+          type: "BUDGET_EXCEEDED",
         });
       }
     } catch (err: any) {
@@ -233,6 +236,7 @@ Instruksi PENTING:
             title: "Pengingat Tagihan 📅",
             body: messageText,
             clickAction: "/dashboard",
+            type: "SUBSCRIPTION_REMINDER",
           });
         }
       } catch (err: any) {

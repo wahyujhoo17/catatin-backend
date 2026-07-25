@@ -10,12 +10,35 @@ export interface PushNotificationPayload {
   icon?: string;
   clickAction?: string; // URL yang dibuka saat notifikasi diklik (default: /dashboard)
   data?: Record<string, string>;
+  type?: "EXPENSE_ALERT" | "BUDGET_EXCEEDED" | "SUBSCRIPTION_REMINDER" | "DAILY_RECAP" | "ADMIN_BROADCAST" | "SYSTEM";
+}
+
+// ─── Persist notification to database ────────────────────────
+async function persistNotifications(payload: PushNotificationPayload): Promise<void> {
+  try {
+    const type = payload.type || "SYSTEM";
+    const records = payload.userIds.map((userId) => ({
+      userId,
+      type: type as any,
+      title: payload.title,
+      body: payload.body,
+      clickAction: payload.clickAction || "/dashboard",
+    }));
+
+    await prisma.notification.createMany({ data: records });
+    console.log(`[Notification] ${records.length} record(s) saved to DB (type: ${type})`);
+  } catch (err: any) {
+    console.error("[Notification] Gagal simpan ke DB:", err.message);
+  }
 }
 
 // ─── Send via BullMQ Queue ────────────────────────────────────
 export async function sendPushNotification(
   payload: PushNotificationPayload,
 ): Promise<{ queued: boolean; jobId?: string }> {
+  // Simpan ke database terlebih dahulu (fire-and-forget)
+  persistNotifications(payload).catch(() => {});
+
   try {
     const job = await notificationQueue.add("push", payload, {
       attempts: 2,
@@ -35,6 +58,9 @@ export async function sendPushNotification(
 export async function sendPushNotificationDirect(
   payload: PushNotificationPayload,
 ): Promise<{ sent: number; failed: number }> {
+  // Simpan ke database terlebih dahulu
+  await persistNotifications(payload);
+
   const admin = getFirebaseAdmin();
   if (!admin) {
     console.warn("[Notification] Firebase Admin tidak tersedia.");

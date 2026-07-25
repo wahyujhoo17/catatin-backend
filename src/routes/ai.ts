@@ -2002,6 +2002,17 @@ aiRoutes.post("/chat", async (c) => {
     return c.json({ error: "Message is required" }, 400);
   }
 
+  // Handle draft reply context
+  let effectiveMessage = message;
+  const lastBotMessage = history && history.length > 0 ? history[history.length - 1] : null;
+  if (lastBotMessage?.role === "assistant" && lastBotMessage.content.includes("[ASK_ACCOUNT:")) {
+    const lastUserMsg = [...history].reverse().find((m: any) => m.role === "user");
+    if (lastUserMsg) {
+      effectiveMessage = `${lastUserMsg.content} menggunakan akun ${message}`;
+      console.log(`[AI] Draft reply detected. Effective message: "${effectiveMessage}"`);
+    }
+  }
+
   // ─── Fetch accounts early (needed for classifier + all paths) ──
   const accounts = await prisma.account.findMany({
     where: { userId: user.userId },
@@ -2010,8 +2021,8 @@ aiRoutes.post("/chat", async (c) => {
 
   // ─── LLM Classifier: deteksi & ekstrak transaksi dari pesan ──
   // Pre-filter: skip LLM classifier jika tidak ada indikasi amount
-  const txClass = hasPotentialAmount(message)
-    ? await classifyTransactionMessage(message, accounts)
+  const txClass = hasPotentialAmount(effectiveMessage)
+    ? await classifyTransactionMessage(effectiveMessage, accounts)
     : null;
 
   // ─── Path A: Complete transaction → save langsung, tanpa AI ──
@@ -2022,7 +2033,7 @@ aiRoutes.post("/chat", async (c) => {
     txClass.type &&
     txClass.accountId &&
     txClass.type !== "TRANSFER" &&
-    !isBalanceAdjustmentRequest(message)
+    !isBalanceAdjustmentRequest(effectiveMessage)
   ) {
     const matchedAccount = accounts.find((a) => a.id === txClass.accountId)!;
     console.log(
@@ -2093,6 +2104,12 @@ aiRoutes.post("/chat", async (c) => {
               description: txClass.description || "Pengeluaran"
             });
           }
+
+          // Trigger cumulative budget alerts
+          const { checkAndTriggerBudgetAlerts } = require("../services/budgetAlert");
+          checkAndTriggerBudgetAlerts(user.userId, txClass.amount!, txClass.description || "Pengeluaran", categoryId).catch((err: any) => {
+            console.error("[BudgetAlert] Error in async AI alert trigger:", err.message);
+          });
         }
 
         try {
@@ -2662,8 +2679,14 @@ aiRoutes.post("/chat/sync", async (c) => {
     return c.json({ error: "Message is required" }, 400);
   }
 
+  // ─── Gabungkan Draf dengan Pesan Baru untuk Konteks ────────
+  let effectiveMessage = message;
+  if (draft && typeof draft === 'string') {
+    effectiveMessage = `Draf sebelumnya: "${draft}"\nPesan baru: "${message}"`;
+  }
+
   // ─── Deteksi intent + bangun system prompt ──────────────
-  let { intent, timeRange } = await extractIntentAndTemporal(message);
+  let { intent, timeRange } = await extractIntentAndTemporal(effectiveMessage);
   // draft mode selalu butuh full context (transaksi)
   // penyesuaian saldo juga butuh full context + tools (adjust_balance)
   let finalIntent = (draft || isBalanceAdjustmentRequest(message)) ? "transaksi" : intent;

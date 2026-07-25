@@ -2138,22 +2138,8 @@ aiRoutes.post("/chat", async (c) => {
           return created;
         });
 
-        // Trigger real-time alert jika pengeluaran > threshold
+        // Trigger real-time & cumulative budget alerts
         if (String(txClass.type).toUpperCase() === "EXPENSE") {
-          const userObj = await prisma.user.findUnique({ where: { id: user.userId }, select: { name: true, customAiConfig: true } });
-          const config = userObj?.customAiConfig as any;
-          const threshold = config?.alertThreshold ?? 500000;
-          
-          if (txClass.amount! >= threshold) {
-            await cronQueue.add("realtime-ai-alert", {
-              userId: user.userId,
-              userName: userObj?.name || "User",
-              amount: txClass.amount!,
-              description: txClass.description || "Pengeluaran"
-            });
-          }
-
-          // Trigger cumulative budget alerts
           const { checkAndTriggerBudgetAlerts } = require("../services/budgetAlert");
           checkAndTriggerBudgetAlerts(user.userId, txClass.amount!, txClass.description || "Pengeluaran", categoryId).catch((err: any) => {
             console.error("[BudgetAlert] Error in async AI alert trigger:", err.message);
@@ -2408,20 +2394,12 @@ aiRoutes.post("/chat", async (c) => {
               return created;
             });
 
-            // Trigger real-time alert jika pengeluaran > threshold
+            // Trigger real-time & cumulative budget alerts
             if (String(parsed.type).toUpperCase() === "EXPENSE") {
-              const userObj = await prisma.user.findUnique({ where: { id: user.userId }, select: { name: true, customAiConfig: true } });
-              const config = userObj?.customAiConfig as any;
-              const threshold = config?.alertThreshold ?? 500000;
-
-              if (parsed.amount >= threshold) {
-                await cronQueue.add("realtime-ai-alert", {
-                  userId: user.userId,
-                  userName: userObj?.name || "User",
-                  amount: parsed.amount,
-                  description: parsed.description
-                });
-              }
+              const { checkAndTriggerBudgetAlerts } = require("../services/budgetAlert");
+              checkAndTriggerBudgetAlerts(user.userId, parsed.amount, parsed.description || "Pengeluaran", categoryId).catch((err: any) => {
+                console.error("[BudgetAlert] Error in async AI alert trigger:", err.message);
+              });
             }
 
             try {

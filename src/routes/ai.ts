@@ -454,6 +454,16 @@ function isLikelyTransaction(message: string): boolean {
   return hasAmount && hasActionVerb && !isQuery;
 }
 
+// ─── Detect budget target requests ────────────────────────
+// "bikin maksimal pengeluaran harian 100rb", "set budget bulanan 2jt", etc.
+function isBudgetRequest(message: string): boolean {
+  if (!message) return false;
+  const text = message.toLowerCase();
+  const hasAmount = /\b\d[\d.,]*\s*(?:jt|juta|rb|ribu|[kK])?\b/i.test(text);
+  const hasBudgetKeyword = /\b(maksimal pengeluaran|budget|target budget|batas harian|batas mingguan|batas bulanan|limit harian|limit pengeluaran|set budget|atur budget|bikin budget|buat budget|maksimal harian|maksimal mingguan|maksimal bulanan)\b/i.test(text);
+  return hasBudgetKeyword && hasAmount;
+}
+
 // ─── Detect balance adjustment requests ───────────────────
 // "sesuaikan saldo bri jadi 500rb", "atur ulang saldo bca 2jt", etc.
 
@@ -895,13 +905,14 @@ function analyzeIntent(message: string): {
   // Supaya "beli kopi 15k tadi" tidak salah ambil timeRange
   const timeRange = parseTemporal(message);
 
-  // ── Transaksi BARU / CANCEL / EDIT / ADJUST / GOAL / SUBSCRIPTION: prioritas tertinggi setelah non-finansial ──────────
+  // ── Transaksi BARU / CANCEL / EDIT / ADJUST / GOAL / SUBSCRIPTION / BUDGET: prioritas tertinggi setelah non-finansial ──────────
   if (
     isLikelyTransaction(message) ||
     isCancellationRequest(message) ||
     isBalanceAdjustmentRequest(message) ||
     isSavingGoalRequest(message) ||
-    isNotificationOrSubscriptionRequest(message)
+    isNotificationOrSubscriptionRequest(message) ||
+    isBudgetRequest(message)
   ) {
     return { intent: "transaksi", timeRange: null };
   }

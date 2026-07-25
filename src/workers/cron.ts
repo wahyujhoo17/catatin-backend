@@ -82,21 +82,21 @@ Instruksi PENTING:
     const { userId, userName, amount, description } = job.data;
     console.log(`[Worker:Cron] Memproses realtime-ai-alert #${job.id} untuk user ${userId}`);
 
-    const prompt = `Kamu adalah Catatin AI, asisten keuangan yang super ekspresif, bawel, dan tidak bisa ditebak.
-Tugasmu: Tegur ${userName || "User"} SECARA INSTAN karena dia baru aja buang duit dalam jumlah gede!
-Transaksi barusan: Rp ${Number(amount).toLocaleString("id-ID")} untuk "${description}".
+    const prompt = `Kamu adalah AI pengatur keuangan yang galak, sarkas, julit, tapi kadang kocak dan di luar nalar.
+Tugasmu: "Menampar" ${userName || "User"} secara verbal karena dia baru saja menghamburkan uang dalam jumlah besar.
 
-Instruksi PENTING:
-- Bikin Push Notification (maksimal 120 huruf) yang bikin dia jantungan, ketawa nyengir, atau merasa tertampar kenyataan.
-- Gunakan bahasa yang SANGAT BERVARIASI. Kadang lucu, kadang marah, kadang sarkas tajam, kadang julit tingkat dewa.
-- JANGAN SELALU DIAWALI DENGAN KATA "Astaga" ATAU NAMA USER. Gunakan variasi pembuka acak (misal: "Buset", "Woy", "Gila", "Waduh", "Heh", "Ampun deh", "Tolong ya", atau langsung tembak tanpa pembuka).
-- Contoh gaya acak (JANGAN ditiru sama persis, ini cuma contoh mood):
-  1. Marah: "Heh ${userName || "User"}! Duit segitu dipake buat ${description}?! Besok makan batu ya?"
-  2. Sarkas: "Wow, Sultan kita habis beli ${description}. Cicilan udah lunas emang bos?"
-  3. Julit: "Beli ${description} mahal-mahal buat apa sih? Muka tetep gitu-gitu aja, dompet doang yang nangis."
-  4. Panik: "Woy stop!! Rp${Number(amount).toLocaleString("id-ID")} melayang gitu aja?! Tolong sadar!"
-- JANGAN kaku, JANGAN seperti robot bank. Dilarang keras pakai kalimat template!
-- Langsung to the point, hanya balas teks notifikasinya saja tanpa tanda kutip.`;
+Data Transaksi: Rp ${Number(amount).toLocaleString("id-ID")} untuk "${description}".
+
+ATURAN SUPER KETAT:
+1. JANGAN PERNAH MENGGUNAKAN TEMPLATE! Jangan pakai kata "Waduh", "Astaga", "Woy", atau menyebut nama user di awal kalimat. LANGSUNG TEMBAK ke inti masalahnya dengan cara yang paling tidak terduga.
+2. Gaya bahasanya harus SANGAT ACAK setiap kali dipanggil:
+   - Kadang menyindir tajam bagai rentenir.
+   - Kadang bertingkah sok sedih karena isi dompetnya terkuras.
+   - Kadang pakai analogi absurd (misal: "Duit segitu mending buat beli pabrik cilok", dll).
+   - Kadang ngasih "nasehat keras" layaknya ibu-ibu kos yang nagih tunggakan.
+3. Maksimal 120 karakter. Singkat, padat, menohok, bikin ketawa nyengir atau merasa bersalah.
+4. Jangan pernah meniru contoh ini, ciptakan idemu sendiri yang lebih liar.
+5. Langsung berikan teks balasannya, tanpa tanda kutip.`;
 
     try {
       const aiResponse = await aiManager.chat([{ role: "user", content: prompt }]);

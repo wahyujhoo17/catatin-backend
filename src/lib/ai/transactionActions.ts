@@ -417,6 +417,38 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         continue;
       }
 
+      // --- delete_budget ---
+      if (actionType === "delete_budget") {
+        const { category: catName, period } = parsed;
+        const validPeriod = period || "MONTHLY";
+
+        let categoryId: string | null = null;
+        if (catName && typeof catName === "string" && !["keseluruhan", "semua", "total", "global", "all"].includes(catName.trim().toLowerCase())) {
+          const existingCat = await prisma.category.findFirst({
+            where: { userId, name: catName }
+          });
+          if (existingCat) categoryId = existingCat.id;
+        }
+
+        const existingBudget = await prisma.budget.findFirst({
+          where: {
+            userId,
+            categoryId,
+            period: validPeriod,
+          },
+          include: { category: true }
+        });
+
+        if (existingBudget) {
+          await prisma.budget.delete({ where: { id: existingBudget.id } });
+          processedEvents.push({
+            action: "delete_budget",
+            budget: existingBudget
+          });
+        }
+        continue;
+      }
+
       // --- split_bill ---
       if (actionType === "split_bill") {
         if (accounts.length === 0) continue;

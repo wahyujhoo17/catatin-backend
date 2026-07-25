@@ -310,6 +310,21 @@ export const aiTools = [
   {
     type: "function",
     function: {
+      name: "delete_budget",
+      description: "Hapus target budget. Gunakan jika user bilang 'hapus budget makan' atau 'batalkan budget bulanan'.",
+      parameters: {
+        type: "object",
+        properties: {
+          period: { type: "string", enum: ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"], description: "Periode budget yang dihapus (harus spesifik)" },
+          category: { type: "string", description: "Kategori budget yang dihapus (kosongkan jika budget keseluruhan/umum)" }
+        },
+        required: ["period"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "split_bill",
       description: "Catat transaksi patungan/split bill dimana user membayar total tapi akan dibagi ke orang lain",
       parameters: {
@@ -1770,7 +1785,8 @@ export async function buildFinancialContext(
         "- Struktur: ringkasan → detail → saran (jika diminta).\n\n" +
         `Aturan (periode: ${range.label}):\n` +
         "- Jawab pertanyaan keuangan HANYA dari DATA di bawah.\n" +
-        "- Sebutkan total pemasukan + pengeluaran + saldo.\n" +
+        "- Jika user HANYA menanyakan daftar budget atau sisa budget, sebutkan datanya SECARA RINGKAS (jangan buat laporan keuangan panjang lebar).\n" +
+        "- Sebutkan total pemasukan + pengeluaran + saldo JIKA user menanyakan ringkasan keuangan.\n" +
         "- Jika ada data Tagihan/Langganan Rutin Aktif, sertakan juga informasinya jika relevan.\n" +
         "- Breakdown per-kategori pengeluaran dengan - list (cukup sebut nama + nominal).\n" +
         "- Jika user minta saran/masukan atau estimasi kapan bisa membeli barang: hitung rasional (Target ÷ Alokasi Tabungan Sehat 20%-30% dari Gaji), DILARANG KERAS berasumsi user bisa menabung 100% gaji tanpa makan/hidup! Gunakan list bernomor urut (1., 2., 3., dst.) pendek.\n" +
@@ -2588,6 +2604,7 @@ aiRoutes.post("/chat", async (c) => {
           if (ev.action === "set_alert_threshold") eventType = "threshold_updated";
           if (ev.action === "adjust_balance") eventType = "balance_adjusted";
           if (ev.action === "set_budget") eventType = "budget_created";
+          if (ev.action === "delete_budget") eventType = "budget_deleted";
           if (ev.action === "create_saving_goal") eventType = "goal_created";
           if (ev.action === "allocate_saving_goal") eventType = "goal_allocated";
           if (ev.action === "error") eventType = "tool_error";
@@ -2642,8 +2659,12 @@ aiRoutes.post("/chat", async (c) => {
             } else if (eventType === "budget_created") {
               const b = ev.budget;
               const amt = Number(b.amount || 0).toLocaleString("id-ID");
-              const catName = b.category?.name || "Kategori";
+              const catName = b.category?.name || "Semua Kategori";
               msg = `🎯 Target budget dibuat: ${catName} — Rp ${amt} (${b.period || "MONTHLY"})\n\n`;
+            } else if (eventType === "budget_deleted") {
+              const b = ev.budget;
+              const catName = b.category?.name || "Semua Kategori";
+              msg = `🗑️ Target budget **${catName} (${b.period})** berhasil dihapus.\n\n`;
             } else if (eventType === "goal_created") {
               const g = ev.goal;
               const amt = Number(g.targetAmount || 0).toLocaleString("id-ID");

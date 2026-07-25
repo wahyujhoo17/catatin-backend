@@ -295,15 +295,15 @@ export const aiTools = [
     type: "function",
     function: {
       name: "set_budget",
-      description: "Buat atau ubah target budget harian/mingguan/bulanan/tahunan untuk suatu kategori pengeluaran",
+      description: "Buat atau ubah target budget harian/mingguan/bulanan/tahunan. Jika untuk keseluruhan pengeluaran, kosongkan category.",
       parameters: {
         type: "object",
         properties: {
-          category: { type: "string", description: "Nama kategori pengeluaran" },
+          category: { type: "string", description: "Nama kategori pengeluaran (opsional, kosongkan jika untuk total/keseluruhan pengeluaran)" },
           amount: { type: "number", description: "Nominal budget (angka tanpa titik/koma)" },
           period: { type: "string", enum: ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"], description: "Periode budget" }
         },
-        required: ["category", "amount", "period"]
+        required: ["amount", "period"]
       }
     }
   },
@@ -1565,9 +1565,10 @@ export async function buildFinancialContext(
         `   - JIKA user meminta "setor/alokasikan [nominal] ke [nama target]": WAJIB panggil tool allocate_saving_goal.\n` +
         `   - DILARANG KERAS membuat ringkasan laporan pemasukan/pengeluaran/saldo jika user HANYA meminta membuat atau menyetor target tabungan! Cukup panggil tool create_saving_goal atau allocate_saving_goal.\n` +
         `11. NOTIFIKASI, PENGINGAT RUTIN & HAPUS TAGIHAN LUNAS:\n` +
-        `   - Catatin AI MEMILIKI sistem notifikasi & alarm pengingat otomatis (Push Notification / WhatsApp / Background Cron). DILARANG KERAS menjawab bahwa Anda "tidak dapat mengatur notifikasi otomatis"!\n` +
         `   - JIKA user meminta notifikasi/pengingat rutin (misal: "berikan saya notifikasi setiap minggu untuk menabung 250rb" atau "ingatkan bayar wifi 300rb tiap bulan"): WAJIB panggil tool add_subscription dengan cycle (WEEKLY/MONTHLY) dan name yang sesuai!\n` +
-        `   - JIKA user minta menghapus/membatalkan tagihan karena sudah lunas/tidak dipakai (misal: "hapus tagihan Kos", "tagihan Netflix sudah lunas"): WAJIB panggil tool delete_subscription dengan name atau id tagihan!\n`;
+        `   - JIKA user minta menghapus/membatalkan tagihan karena sudah lunas/tidak dipakai (misal: "hapus tagihan Kos", "tagihan Netflix sudah lunas"): WAJIB panggil tool delete_subscription dengan name atau id tagihan!\n` +
+        `12. TARGET BUDGET (HARIAN / MINGGUAN / BULANAN / TAHUNAN):\n` +
+        `   - JIKA user meminta "buat/set/atur budget [nominal] [periode]" ATAU "maksimal pengeluaran saya [nominal] [periode]" (misal: "maksimal pengeluaran harian 100rb", "set budget bulanan mamin 2jt", "maksimal pengeluaran saya 100rb"): WAJIB panggil tool set_budget dengan amount, period (DAILY/WEEKLY/MONTHLY/YEARLY), dan category (jika ada). Jika periode tidak disebutkan, asumsikan DAILY untuk kata 'maksimal harian' atau 'harian', atau default MONTHLY!\n`;
     }
   }
 

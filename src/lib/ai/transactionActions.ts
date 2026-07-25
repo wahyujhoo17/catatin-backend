@@ -363,34 +363,56 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
       // --- set_budget ---
       if (actionType === "set_budget") {
         const { category: catName, amount, period } = parsed;
-        if (!catName || typeof amount !== "number" || amount <= 0) continue;
+        if (typeof amount !== "number" || amount <= 0) continue;
 
         let categoryId: string | null = null;
-        const existingCat = await prisma.category.findFirst({
-          where: { userId, name: catName }
-        });
-        if (existingCat) {
-          categoryId = existingCat.id;
-        } else {
-          const newCat = await prisma.category.create({
-            data: { userId, name: catName, type: "EXPENSE" }
+        if (catName && typeof catName === "string" && !["keseluruhan", "semua", "total", "global", "all"].includes(catName.trim().toLowerCase())) {
+          const existingCat = await prisma.category.findFirst({
+            where: { userId, name: catName }
           });
-          categoryId = newCat.id;
+          if (existingCat) {
+            categoryId = existingCat.id;
+          } else {
+            const newCat = await prisma.category.create({
+              data: { userId, name: catName, type: "EXPENSE" }
+            });
+            categoryId = newCat.id;
+          }
         }
 
-        const newBudget = await prisma.budget.create({
-          data: {
+        const validPeriod = period || "MONTHLY";
+
+        // Cek apakah budget untuk kategori & periode ini sudah ada
+        const existingBudget = await prisma.budget.findFirst({
+          where: {
             userId,
             categoryId,
-            amount,
-            period: period || "MONTHLY",
+            period: validPeriod,
           },
-          include: { category: true }
         });
+
+        let budgetObj;
+        if (existingBudget) {
+          budgetObj = await prisma.budget.update({
+            where: { id: existingBudget.id },
+            data: { amount },
+            include: { category: true },
+          });
+        } else {
+          budgetObj = await prisma.budget.create({
+            data: {
+              userId,
+              categoryId,
+              amount,
+              period: validPeriod,
+            },
+            include: { category: true },
+          });
+        }
 
         processedEvents.push({
           action: "set_budget",
-          budget: newBudget
+          budget: budgetObj
         });
         continue;
       }

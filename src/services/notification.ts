@@ -84,26 +84,26 @@ export async function sendPushNotificationDirect(
 
   // Kirim multicast message (webpush only — jangan pakai top-level `notification`
   // karena Firebase FCM akan menampilkan notifikasi ganda).
-  const message = {
-    webpush: {
-      fcmOptions: {
-        link: "/notifications?openLatest=1",
+    const message = {
+      webpush: {
+        notification: {
+          title: payload.title,
+          body: payload.body,
+          icon: payload.icon || "/icon-192.png",
+          badge: "/icon-192.png",
+          requireInteraction: true,
+          actions: [
+            { action: "open", title: "Buka" },
+            { action: "dismiss", title: "Tutup" },
+          ],
+        },
       },
-      notification: {
-        title: payload.title,
-        body: payload.body,
-        icon: payload.icon || "/icon-192.png",
-        badge: "/icon-192.png",
-        requireInteraction: true,
-        actions: [
-          { action: "open", title: "Buka" },
-          { action: "dismiss", title: "Tutup" },
-        ],
+      data: {
+        ...(payload.data || {}),
+        click_action: "/notifications?openLatest=1",
       },
-    },
-    data: payload.data || {},
-    tokens,
-  };
+      tokens,
+    };
 
   const response = await admin.messaging.sendEachForMulticast(message);
 

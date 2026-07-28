@@ -4,7 +4,13 @@ import prisma from "../prisma";
 
 const MAX_IDR_AMOUNT = 1_000_000_000_000_000;
 const text = (max: number) => z.string().trim().min(1).max(max);
-const idOrName = text(160);
+const idOrName = z.string().trim().min(1).max(160);
+const optionalIdOrName = z
+  .string()
+  .trim()
+  .max(160)
+  .transform((v) => (v === "" ? undefined : v))
+  .optional();
 const amount = z.number().finite().int().positive().max(MAX_IDR_AMOUNT);
 const nonNegativeAmount = z
   .number()
@@ -37,7 +43,7 @@ const actionSchemas = {
       amount,
       description: text(240),
       category: text(100),
-      accountId: idOrName.optional(),
+      accountId: optionalIdOrName,
     })
     .strict(),
   transfer_balance: z

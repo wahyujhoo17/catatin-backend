@@ -2811,34 +2811,6 @@ aiRoutes.post("/chat", async (c) => {
   });
 });
 
-function confirmedActionMessage(events: any[]): string {
-  const event = events.find((item) => item.action !== "error");
-  if (!event) return "Aksi tidak menghasilkan perubahan.";
-  if (event.action === "record") {
-    return `Transaksi ${event.transaction.description} sebesar Rp${Number(event.transaction.amount).toLocaleString("id-ID")} berhasil dicatat.`;
-  }
-  if (event.action === "transfer") {
-    return `Transfer Rp${Number(event.transaction.amount).toLocaleString("id-ID")} dari ${event.transaction.fromAccount} ke ${event.transaction.toAccount} berhasil.`;
-  }
-  if (event.action === "delete") return "Transaksi berhasil dihapus.";
-  if (event.action === "update") return "Transaksi berhasil diperbarui.";
-  if (event.action === "adjust_balance")
-    return `Saldo ${event.account.name} berhasil disesuaikan.`;
-  if (event.action === "add_subscription")
-    return "Pengingat rutin berhasil dibuat.";
-  if (event.action === "delete_subscription")
-    return "Pengingat rutin berhasil dihapus.";
-  if (event.action === "set_budget") return "Budget berhasil disimpan.";
-  if (event.action === "delete_budget") return "Budget berhasil dihapus.";
-  if (event.action === "create_saving_goal")
-    return "Target tabungan berhasil dibuat.";
-  if (event.action === "allocate_saving_goal")
-    return "Alokasi target tabungan berhasil disimpan.";
-  if (event.action === "set_alert_threshold")
-    return "Batas peringatan berhasil diperbarui.";
-  return "Aksi berhasil dijalankan.";
-}
-
 // ─── Confirm/cancel proposed write actions ─────────────────────
 aiRoutes.get("/actions/pending", async (c) => {
   const user = c.get("user");
@@ -2890,7 +2862,7 @@ aiRoutes.post("/actions/:id/confirm", async (c) => {
     return c.json({
       status: request.status,
       events: request.result,
-      message: "Aksi ini sudah pernah dijalankan.",
+      message: "Sudah dijalankan.",
     });
   }
   if (request.expiresAt <= new Date()) {
@@ -2937,36 +2909,19 @@ aiRoutes.post("/actions/:id/confirm", async (c) => {
       throw new Error("Aksi tidak menghasilkan perubahan");
     }
 
-    const confirmationMessage = confirmedActionMessage(events);
-    await prisma.$transaction(async (tx) => {
-      await tx.aiActionRequest.update({
-        where: { id: request.id },
-        data: {
-          status: "EXECUTED",
-          result: events as any,
-          executedAt: new Date(),
-          error: null,
-        },
-      });
-      if (request.proposalMessage) {
-        await tx.aiMessage.create({
-          data: {
-            conversationId: request.proposalMessage.conversationId,
-            userId: user.userId,
-            role: "assistant",
-            content: confirmationMessage,
-            metadata: {
-              aiActionRequestId: request.id,
-              aiActionStatus: "EXECUTED",
-            },
-          },
-        });
-      }
+    await prisma.aiActionRequest.update({
+      where: { id: request.id },
+      data: {
+        status: "EXECUTED",
+        result: events as any,
+        executedAt: new Date(),
+        error: null,
+      },
     });
     return c.json({
       status: "EXECUTED",
       events,
-      message: confirmationMessage,
+      message: "Sudah dijalankan.",
     });
   } catch (error) {
     const message =

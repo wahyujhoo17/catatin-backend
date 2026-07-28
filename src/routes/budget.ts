@@ -57,7 +57,8 @@ budgets.get("/", async (c) => {
         where: {
           userId,
           type: "EXPENSE",
-          categoryId: budget.categoryId,
+          isTransfer: false,
+          ...(budget.categoryId ? { categoryId: budget.categoryId } : {}),
           date: {
             gte: startDate,
             lte: endDate

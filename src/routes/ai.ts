@@ -1510,7 +1510,8 @@ export async function buildFinancialContext(
           where: {
             userId,
             type: "EXPENSE",
-            categoryId: b.categoryId,
+            isTransfer: false,
+            ...(b.categoryId ? { categoryId: b.categoryId } : {}),
             date: { gte: startDt, lte: endDt }
           },
           _sum: { amount: true }

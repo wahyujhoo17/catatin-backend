@@ -87,6 +87,7 @@ export async function checkAndTriggerBudgetAlerts(
         where: {
           userId,
           type: "EXPENSE",
+          isTransfer: false,
           ...(budget.categoryId ? { categoryId: budget.categoryId } : {}),
           date: {
             gte: startDate,

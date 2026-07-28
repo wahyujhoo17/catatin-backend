@@ -1669,10 +1669,10 @@ export async function buildFinancialContext(
       systemContent =
         "Kamu: Catatin AI, asisten keuangan pribadi.\n\n" +
         "FORMAT:\n" +
-        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
-        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
-        "- JANGAN pakai list bertingkat (sub-bullet di dalam bullet).\n" +
-        "- Paragraf maksimal 3 kalimat.\n\n" +
+        "- Gunakan format Markdown (.MD) sebebas dan sekreatif mungkin (tabel, list, bold, italic, emoji).\n" +
+        "- DUKUNGAN TABEL: Sangat disarankan menggunakan Tabel Markdown untuk menyajikan data laporan (seperti daftar pengeluaran/pemasukan/budget) agar rapi dan mudah dibaca.\n" +
+        "- Gunakan Heading (###) untuk membagi bagian.\n" +
+        "- JANGAN batasi dirimu! Bebas gunakan bullet point bertingkat atau quote (>).\n\n" +
         "Aturan:\n" +
         "- Jawab pertanyaan saldo HANYA dari DATA di bawah.\n" +
         "- Jika user tanya akun spesifik: jawab HANYA akun itu.\n" +
@@ -1687,10 +1687,10 @@ export async function buildFinancialContext(
       systemContent =
         "Kamu: Catatin AI, asisten keuangan pribadi.\n\n" +
         "FORMAT:\n" +
-        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
-        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
-        "- JANGAN pakai list bertingkat (sub-bullet di dalam bullet).\n" +
-        "- Paragraf maksimal 3 kalimat.\n\n" +
+        "- Gunakan format Markdown (.MD) sebebas dan sekreatif mungkin (tabel, list, bold, italic, emoji).\n" +
+        "- DUKUNGAN TABEL: Sangat disarankan menggunakan Tabel Markdown untuk menyajikan data laporan (seperti daftar pengeluaran/pemasukan/budget) agar rapi dan mudah dibaca.\n" +
+        "- Gunakan Heading (###) untuk membagi bagian.\n" +
+        "- JANGAN batasi dirimu! Bebas gunakan bullet point bertingkat atau quote (>).\n\n" +
         `Aturan (periode: ${range.label}):\n` +
         "- Jawab pertanyaan pengeluaran HANYA dari DATA di bawah.\n" +
         "- Sebutkan total pengeluaran + breakdown per-kategori dengan - list.\n" +
@@ -1712,9 +1712,10 @@ export async function buildFinancialContext(
       systemContent =
         "Kamu: Catatin AI, asisten keuangan pribadi.\n\n" +
         "FORMAT:\n" +
-        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
-        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
-        "- JANGAN pakai list bertingkat. Paragraf maksimal 3 kalimat.\n\n" +
+        "- Gunakan format Markdown (.MD) sebebas dan sekreatif mungkin (tabel, list, bold, italic, emoji).\n" +
+        "- DUKUNGAN TABEL: Sangat disarankan menggunakan Tabel Markdown untuk menyajikan data laporan (seperti daftar pengeluaran/pemasukan/budget) agar rapi dan mudah dibaca.\n" +
+        "- Gunakan Heading (###) untuk membagi bagian.\n" +
+        "- JANGAN batasi dirimu! Bebas gunakan bullet point bertingkat atau quote (>).\n\n" +
         `Aturan (periode: ${range.label}):\n` +
         "- Jawab pertanyaan pemasukan HANYA dari DATA di bawah.\n" +
         // P5: instruksi breakdown kategori pemasukan
@@ -1728,11 +1729,9 @@ export async function buildFinancialContext(
       systemContent =
         "Kamu: Catatin AI, asisten keuangan dan analis finansial pribadi.\n\n" +
         "FORMAT:\n" +
-        "- Gunakan ### Heading untuk section, **bold** untuk angka dan poin penting.\n" +
-        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
-        "- Gunakan list bernomor urut (1., 2., 3., dst.) untuk rekomendasi, - list untuk rincian.\n" +
-        "- PENTING: Tulis nomor list dan teks di baris yang sama (contoh: '1. Batasi pengeluaran...'). JANGAN menuliskan nomor list di baris terpisah atau menggunakan angka 1. untuk semua item.\n" +
-        "- Paragraf maksimal 3 kalimat.\n\n" +
+        "- Gunakan format Markdown (.MD) sebebas dan sekreatif mungkin.\n" +
+        "- Gunakan Tabel Markdown jika menyajikan perbandingan data.\n" +
+        "- Gunakan list bernomor urut (1., 2., 3., dst.) untuk rekomendasi, dan tebalkan poin penting.\n\n" +
         `Aturan (periode: ${range.label}):\n` +
         "- WAJIB berikan analisis mendalam dari DATA di bawah — jangan hanya melaporkan angka.\n" +
         "- Struktur jawaban: (1) Ringkasan kondisi keuangan, (2) Temuan penting dari data, (3) Rekomendasi konkret.\n" +
@@ -1757,9 +1756,10 @@ export async function buildFinancialContext(
       systemContent =
         "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, transaksi, tabungan. Diluar itu tolak sopan.\n\n" +
         "FORMAT:\n" +
-        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
-        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
-        "- JANGAN pakai list bertingkat. Paragraf maksimal 3 kalimat.\n\n" +
+        "- Gunakan format Markdown (.MD) sebebas dan sekreatif mungkin (tabel, list, bold, italic, emoji).\n" +
+        "- DUKUNGAN TABEL: Sangat disarankan menggunakan Tabel Markdown untuk menyajikan data laporan (seperti daftar pengeluaran/pemasukan/budget) agar rapi dan mudah dibaca.\n" +
+        "- Gunakan Heading (###) untuk membagi bagian.\n" +
+        "- JANGAN batasi dirimu! Bebas gunakan bullet point bertingkat atau quote (>).\n\n" +
         actionFormat +
         "Aturan menjawab pertanyaan keuangan (penting!):\n" +
         "- Jika user tanya pengeluaran: sebut total + per-kategori dari DATA + " +
@@ -1784,9 +1784,10 @@ export async function buildFinancialContext(
       systemContent =
         "Kamu: Catatin AI, asisten keuangan pribadi. HANYA jawab topik keuangan, budgeting, tabungan. Diluar itu tolak sopan.\n\n" +
         "FORMAT:\n" +
-        "- Gunakan ### Heading untuk section, **bold** untuk angka saja, - list untuk rincian.\n" +
-        "- Beri baris KOSONG sebelum dan sesudah setiap list.\n" +
-        "- JANGAN pakai list bertingkat. Paragraf maksimal 3 kalimat.\n" +
+        "- Gunakan format Markdown (.MD) sebebas dan sekreatif mungkin (tabel, list, bold, italic, emoji).\n" +
+        "- DUKUNGAN TABEL: Sangat disarankan menggunakan Tabel Markdown untuk menyajikan data laporan (seperti daftar pengeluaran/pemasukan/budget) agar rapi dan mudah dibaca.\n" +
+        "- Gunakan Heading (###) untuk membagi bagian.\n" +
+        "- JANGAN batasi dirimu! Bebas gunakan bullet point bertingkat atau quote (>).\n" +
         "- Struktur: ringkasan → detail → saran (jika diminta).\n\n" +
         `Aturan (periode: ${range.label}):\n` +
         "- Jawab pertanyaan keuangan HANYA dari DATA di bawah.\n" +

@@ -4,13 +4,45 @@ import prisma from "../prisma";
 
 const MAX_IDR_AMOUNT = 1_000_000_000_000_000;
 const text = (max: number) => z.string().trim().min(1).max(max);
-const idOrName = z.string().trim().min(1).max(160);
+const normalizeInternalReference = (value: string) => {
+  const trimmed = value.trim();
+  const wrapped = trimmed.match(/^\[([^\[\]]+)\]$/);
+  return (wrapped?.[1] || trimmed).replace(/^ID\s*:\s*/i, "").trim();
+};
+const idOrName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(160)
+  .transform(normalizeInternalReference)
+  .pipe(z.string().min(1).max(160));
 const optionalIdOrName = z
   .string()
   .trim()
   .max(160)
-  .transform((v) => (v === "" ? undefined : v))
+  .transform((value) => {
+    const normalized = normalizeInternalReference(value);
+    return normalized === "" ? undefined : normalized;
+  })
   .optional();
+const internalId = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .transform(normalizeInternalReference)
+    .pipe(z.string().min(1).max(max));
+const optionalInternalId = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .transform((value) => {
+      const normalized = normalizeInternalReference(value);
+      return normalized === "" ? undefined : normalized;
+    })
+    .optional();
 const amount = z.number().finite().int().positive().max(MAX_IDR_AMOUNT);
 const nonNegativeAmount = z
   .number()
@@ -73,7 +105,7 @@ const actionSchemas = {
     .strict(),
   delete_subscription: z
     .object({
-      id: text(128).optional(),
+      id: optionalInternalId(128),
       name: text(120).optional(),
     })
     .strict()
@@ -82,12 +114,12 @@ const actionSchemas = {
     }),
   update_transaction: z
     .object({
-      id: text(128),
+      id: internalId(128),
       amount,
       description: text(240),
     })
     .strict(),
-  delete_transaction: z.object({ id: text(128) }).strict(),
+  delete_transaction: z.object({ id: internalId(128) }).strict(),
   set_alert_threshold: z.object({ threshold: nonNegativeAmount }).strict(),
   adjust_balance: z
     .object({
@@ -204,6 +236,237 @@ export function validateAiToolCall(toolCall: unknown): AiToolCall {
   };
 }
 
+const accountArgumentNames: Partial<
+  Record<AiActionName, readonly string[]>
+> = {
+  record_transaction: ["accountId"],
+  draft_transaction: ["accountId"],
+  transfer_balance: ["fromAccountId", "toAccountId"],
+  adjust_balance: ["accountId"],
+  split_bill: ["accountId"],
+};
+
+export function resolveAiToolCallAccounts(
+  call: AiToolCall,
+  accounts: { id: string; name: string }[],
+): AiToolCall {
+  const argumentNames = accountArgumentNames[call.function.name];
+  if (!argumentNames) return call;
+
+  const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
+  for (const argumentName of argumentNames) {
+    const value = args[argumentName];
+    if (
+      call.function.name === "draft_transaction" &&
+      (value === undefined || value === "")
+    ) {
+      continue;
+    }
+
+    const reference = String(value ?? "").trim();
+    const account = accounts.find(
+      (item) =>
+        item.id === reference ||
+        item.name.toLocaleLowerCase("id-ID") ===
+          reference.toLocaleLowerCase("id-ID"),
+    );
+    if (!account) {
+      throw new Error(`Akun "${reference || "tidak diketahui"}" tidak ditemukan`);
+    }
+    args[argumentName] = account.id;
+  }
+
+  if (
+    call.function.name === "transfer_balance" &&
+    args.fromAccountId === args.toAccountId
+  ) {
+    throw new Error("Akun asal dan tujuan harus berbeda");
+  }
+
+  return {
+    function: {
+      name: call.function.name,
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
+function selectNamedEntity<T extends { id: string; name: string }>(
+  reference: string,
+  entities: T[],
+  label: string,
+): T {
+  const normalized = reference.toLocaleLowerCase("id-ID");
+  const exactId = entities.find((item) => item.id === reference);
+  if (exactId) return exactId;
+
+  const exactNames = entities.filter(
+    (item) => item.name.toLocaleLowerCase("id-ID") === normalized,
+  );
+  if (exactNames.length === 1) return exactNames[0];
+  if (exactNames.length > 1 || entities.length > 1) {
+    throw new Error(`${label} "${reference}" ambigu`);
+  }
+  if (entities.length === 1) return entities[0];
+  throw new Error(`${label} "${reference}" tidak ditemukan`);
+}
+
+export interface AiActionTargetStore {
+  findTransaction(
+    userId: string,
+    id: string,
+  ): Promise<{ id: string } | null>;
+  findSubscriptions(
+    userId: string,
+    id: string,
+    name: string,
+  ): Promise<{ id: string; name: string }[]>;
+  findSavingGoals(
+    userId: string,
+    reference: string,
+  ): Promise<{ id: string; name: string }[]>;
+  findCategory(
+    userId: string,
+    name: string,
+  ): Promise<{ id: string; name: string } | null>;
+  findBudget(
+    userId: string,
+    categoryId: string | null,
+    period: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY",
+  ): Promise<{ id: string } | null>;
+}
+
+const defaultAiActionTargetStore: AiActionTargetStore = {
+  findTransaction: (userId, id) =>
+    prisma.transaction.findFirst({
+      where: { id, userId },
+      select: { id: true },
+    }),
+  findSubscriptions: (userId, id, name) =>
+    prisma.subscription.findMany({
+      where: {
+        userId,
+        OR: [
+          id ? { id } : undefined,
+          name
+            ? { name: { contains: name, mode: "insensitive" as const } }
+            : undefined,
+        ].filter(Boolean) as any[],
+      },
+      select: { id: true, name: true },
+      take: 3,
+    }),
+  findSavingGoals: (userId, reference) =>
+    prisma.savingGoal.findMany({
+      where: {
+        userId,
+        OR: [
+          { id: reference },
+          { name: { contains: reference, mode: "insensitive" } },
+        ],
+      },
+      select: { id: true, name: true },
+      take: 3,
+    }),
+  findCategory: (userId, name) =>
+    prisma.category.findFirst({
+      where: {
+        userId,
+        name: { equals: name, mode: "insensitive" },
+      },
+      select: { id: true, name: true },
+    }),
+  findBudget: (userId, categoryId, period) =>
+    prisma.budget.findFirst({
+      where: { userId, categoryId, period },
+      select: { id: true },
+    }),
+};
+
+export async function resolveAiToolCallTargets(
+  userId: string,
+  call: AiToolCall,
+  store: Partial<AiActionTargetStore> = defaultAiActionTargetStore,
+): Promise<AiToolCall> {
+  const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
+
+  switch (call.function.name) {
+    case "update_transaction":
+    case "delete_transaction": {
+      const id = String(args.id);
+      const transaction = await store.findTransaction!(userId, id);
+      if (!transaction) throw new Error("Transaksi tidak ditemukan");
+      args.id = transaction.id;
+      break;
+    }
+    case "delete_subscription": {
+      const id = args.id ? String(args.id) : "";
+      const name = args.name ? String(args.name).trim() : "";
+      const subscriptions = await store.findSubscriptions!(userId, id, name);
+      const subscription = selectNamedEntity(
+        id || name,
+        subscriptions,
+        "Pengingat",
+      );
+      args.id = subscription.id;
+      args.name = subscription.name;
+      break;
+    }
+    case "allocate_saving_goal": {
+      const reference = String(args.goalId);
+      const goals = await store.findSavingGoals!(userId, reference);
+      const goal = selectNamedEntity(reference, goals, "Target tabungan");
+      args.goalId = goal.id;
+      break;
+    }
+    case "delete_budget": {
+      const globalCategoryNames = new Set([
+        "",
+        "keseluruhan",
+        "semua",
+        "total",
+        "global",
+        "all",
+      ]);
+      const categoryReference = String(args.category || "").trim();
+      let categoryId: string | null = null;
+      if (
+        !globalCategoryNames.has(
+          categoryReference.toLocaleLowerCase("id-ID"),
+        )
+      ) {
+        const category = await store.findCategory!(
+          userId,
+          categoryReference,
+        );
+        if (!category) {
+          throw new Error(`Kategori budget "${categoryReference}" tidak ditemukan`);
+        }
+        categoryId = category.id;
+        args.category = category.name;
+      } else {
+        delete args.category;
+      }
+
+      const period = String(args.period) as
+        | "DAILY"
+        | "WEEKLY"
+        | "MONTHLY"
+        | "YEARLY";
+      const budget = await store.findBudget!(userId, categoryId, period);
+      if (!budget) throw new Error("Budget tidak ditemukan");
+      break;
+    }
+  }
+
+  return {
+    function: {
+      name: call.function.name,
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
 function accountName(
   value: string,
   accounts: { id: string; name: string }[],
@@ -302,9 +565,14 @@ async function buildPreview(
         summary: `${String(args.name)} • target ${rupiah(args.targetAmount)}`,
       };
     case "allocate_saving_goal":
+      const goal = await prisma.savingGoal.findFirst({
+        where: { id: String(args.goalId), userId },
+        select: { name: true },
+      });
+      if (!goal) throw new Error("Target tabungan tidak ditemukan");
       return {
         title: "Alokasikan target tabungan",
-        summary: `${rupiah(args.amount)} ke target yang dipilih`,
+        summary: `${rupiah(args.amount)} ke ${goal.name}`,
       };
     case "draft_transaction":
       return {
@@ -327,8 +595,16 @@ export async function createPendingAiActions(input: {
   const proposals: AiActionProposal[] = [];
 
   for (let index = 0; index < input.toolCalls.length; index += 1) {
-    const call = validateAiToolCall(input.toolCalls[index]);
-    if (!requiresConfirmation(call.function.name)) continue;
+    const validatedCall = validateAiToolCall(input.toolCalls[index]);
+    if (!requiresConfirmation(validatedCall.function.name)) continue;
+    const accountResolvedCall = resolveAiToolCallAccounts(
+      validatedCall,
+      input.accounts,
+    );
+    const call = await resolveAiToolCallTargets(
+      input.userId,
+      accountResolvedCall,
+    );
 
     const preview = await buildPreview(input.userId, call, input.accounts);
     const idempotencyKey = createHash("sha256")

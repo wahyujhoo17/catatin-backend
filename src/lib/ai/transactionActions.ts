@@ -2,7 +2,11 @@ import prisma from "../prisma";
 import { clearUserAiCache } from "../redis";
 import { cronQueue } from "../queue";
 import { checkAndTriggerBudgetAlerts } from "../../services/budgetAlert";
-import { validateAiToolCall } from "./actionRequests";
+import {
+  resolveAiToolCallAccounts,
+  resolveAiToolCallTargets,
+  validateAiToolCall,
+} from "./actionRequests";
 import { decryptAiSecret, encryptAiSecret } from "./secrets";
 
 export const processTransactionActions = async (toolCalls: any[], userId: string, accounts: any[]) => {
@@ -12,7 +16,14 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
     if (!toolCall.function || !toolCall.function.name) continue;
 
     try {
-      const normalizedCall = validateAiToolCall(toolCall);
+      const accountResolvedCall = resolveAiToolCallAccounts(
+        validateAiToolCall(toolCall),
+        accounts,
+      );
+      const normalizedCall = await resolveAiToolCallTargets(
+        userId,
+        accountResolvedCall,
+      );
       const actionType = normalizedCall.function.name;
       const parsed = JSON.parse(normalizedCall.function.arguments);
       

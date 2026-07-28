@@ -19,6 +19,11 @@ import {
   syncChatRequestSchema,
 } from "../lib/ai/requestSchemas";
 import {
+  isNotificationOrSubscriptionRequest,
+  shouldAskForTransactionAccount,
+  shouldClassifyAsDirectTransaction,
+} from "../lib/ai/accountRouting";
+import {
   processTransactionActions,
   stripActions,
 } from "../lib/ai/transactionActions";
@@ -604,12 +609,6 @@ function isSavingGoalRequest(message: string): boolean {
   return goalKeywords || (buyingIntent && hasAmount);
 }
 
-function isNotificationOrSubscriptionRequest(message: string): boolean {
-  if (!message) return false;
-  const text = message.toLowerCase();
-  return /\b(notifikasi|ingatkan|pengingat|alarm|rutin|setiap minggu|tiap minggu|setiap bulan|tiap bulan|lunas|hapus tagihan|nonaktifkan tagihan)\b/i.test(text);
-}
-
 // ─── Parse transaction details from a message like "makan malam 45 rb" ──
 // Returns amount, description, category, type for direct DB insertion
 function parseTransactionFromMessage(message: string): {
@@ -720,11 +719,6 @@ function parseTransactionFromMessage(message: string): {
 
 // ─── Pre-filter: cheap regex check sebelum LLM classifier ──
 // Skip LLM call untuk pesan yang jelas-jelas bukan transaksi (query, saldo, sapaan)
-function hasPotentialAmount(message: string): boolean {
-  // Amount dengan suffix: 4jt, 50rb, 100k, 2.5juta, 50000
-  return /\b\d[\d.,]*(?:\s*(?:jt|juta|rb|ribu|[kK])\b)?/.test(message);
-}
-
 // ─── LLM Transaction Classifier ────────────────────────────
 // Gunakan LLM untuk klasifikasi transaksi — lebih pintar dari regex,
 // bisa handle "4 jt", "gaji masuk", "supriadi bayar hutang", dll.
@@ -1665,9 +1659,15 @@ export async function buildFinancialContext(
   if (needFullContext) {
     const accOptions = accounts.map((a) => a.name).join(",");
     if (accounts.length === 0) {
-      accountRule = "⚠️ Belum ada akun. JANGAN catat transaksi. Suruh user tambah akun dulu.\n";
+      accountRule =
+        "⚠️ Belum ada akun. JANGAN catat transaksi, transfer, atau penyesuaian saldo. Pengingat/langganan rutin tetap boleh dibuat karena tidak membutuhkan akun.\n";
     } else if (accounts.length === 1) {
-      accountRule = "✅ 1 akun: " + accounts[0].name + '. Auto-pakai accountId="' + accounts[0].id + '" untuk semua transaksi.\n';
+      accountRule =
+        "✅ 1 akun: " +
+        accounts[0].name +
+        '. Auto-pakai accountId="' +
+        accounts[0].id +
+        '" hanya untuk transaksi yang membutuhkan akun. Pengingat/langganan rutin tidak menggunakan accountId.\n';
     } else {
       accountRule = `📋 ${accounts.length} akun tersedia: ${accOptions}.\n`;
       if (draftMode) {
@@ -1683,30 +1683,30 @@ export async function buildFinancialContext(
     if (accounts.length > 0 && !draftMode) {
       accountRule +=
         `ATURAN PENTING SAAT MENCATAT TRANSAKSI:\n` +
-        `1. Cek apakah user MEMINTA transaksi baru di pesan terakhirmya ATAU meminta pengingat tagihan.\n` +
-        `2. JIKA YA & NAMA DOMPET DISEBUT EKSPLISIT: Panggil tool record_transaction, transfer_balance, atau add_subscription secara paralel. Gunakan ID dompet yang persis sama dengan RAHASIA di bawah.\n` +
-        `3. JIKA NAMA DOMPET TIDAK DISEBUT SAMA SEKALI: JANGAN panggil tool apapun! WAJIB balas dengan teks menanyakan dompet mana yang akan digunakan DAN wajib tambahkan format [ASK_ACCOUNT:${accOptions}] di akhir balasanmu.\n` +
-        `4. JIKA NAMA DOMPET TIDAK TERDAFTAR: JANGAN panggil tool apapun. Balas meminta user memilih akun yang tersedia DAN tambahkan format [ASK_ACCOUNT:${accOptions}] di akhir balasanmu.\n` +
-        `5. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
-        `5. Jika mencatat tagihan (add_subscription), pilih cycle yang tepat dan hitung nextDueDate terdekat yang masuk akal.\n` +
-        `6. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.\n` +
-        `7. PENYESUAIAN SALDO: Jika user minta "sesuaikan/atur/ubah saldo" ke nominal tertentu, WAJIB gunakan tool adjust_balance. JANGAN bilang "sudah disesuaikan" jika belum memanggil tool adjust_balance.\n` +
-        `8. SARAN PROAKTIF (PENTING): Setiap kali selesai mencatat transaksi atau menyelesaikan tugas user, selalu tawarkan 1 saran tindakan lanjutan yang relevan di akhir jawaban (misal: tawarkan catat pengingat tagihan rutin jika transaksi bernuansa tagihan/kos/wifi/subscription, tawarkan buat budget bulanan, atau tawarkan cek saldo/grafik).\n` +
-        `9. PEMBATALAN / HAPUS TRANSAKSI & TRANSFER (SANGAT PENTING):\n` +
+        `1. Bedakan transaksi uang dari pengingat/langganan rutin. add_subscription dan delete_subscription hanya mengatur notifikasi, bukan mencatat pembayaran.\n` +
+        `2. PENGINGAT/LANGGANAN TIDAK MEMBUTUHKAN DOMPET. Jangan pernah meminta akun atau menambahkan [ASK_ACCOUNT:...] untuk add_subscription/delete_subscription. Pilih cycle yang tepat dan hitung nextDueDate terdekat yang masuk akal.\n` +
+        `3. HANYA record_transaction, transfer_balance, dan adjust_balance yang membutuhkan akun. Jika nama akun disebut, gunakan ID yang persis sama dari RAHASIA.\n` +
+        `4. Untuk transaksi yang membutuhkan akun tetapi nama akun tidak disebut, jangan panggil tool transaksi; minta user memilih akun dan tambahkan [ASK_ACCOUNT:${accOptions}] di akhir.\n` +
+        `5. Jika nama akun transaksi tidak terdaftar, minta user memilih akun yang tersedia dan tambahkan [ASK_ACCOUNT:${accOptions}] di akhir.\n` +
+        `6. JANGAN panggil tool jika user hanya bertanya (misal: tanya saldo, laporan, atau sapaan).\n` +
+        `7. Jika user ingin mengubah batas peringatan pengeluaran besar, gunakan tool set_alert_threshold.\n` +
+        `8. PENYESUAIAN SALDO: Jika user minta "sesuaikan/atur/ubah saldo" ke nominal tertentu, WAJIB gunakan tool adjust_balance. JANGAN bilang "sudah disesuaikan" jika belum memanggil tool adjust_balance.\n` +
+        `9. SARAN PROAKTIF (PENTING): Setiap kali selesai mencatat transaksi atau menyelesaikan tugas user, selalu tawarkan 1 saran tindakan lanjutan yang relevan di akhir jawaban (misal: tawarkan catat pengingat tagihan rutin jika transaksi bernuansa tagihan/kos/wifi/subscription, tawarkan buat budget bulanan, atau tawarkan cek saldo/grafik).\n` +
+        `10. PEMBATALAN / HAPUS TRANSAKSI & TRANSFER (SANGAT PENTING):\n` +
         `   - JIKA user minta "batal", "cancel", "undo", "kembalikan", "hapus", atau "tidak jadi" dari transaksi/transfer yang baru dicatat:\n` +
         `   - DILARANG KERAS menjawab bahwa transaksi/transfer "tidak dapat dibatalkan" atau menyuruh user menghubungi bank/layanan pelanggan! Catatin AI adalah asisten pencatatan keuangan pribadi, bukan aplikasi bank nyata. Semua transaksi di Catatin BISA DIBATALKAN DAN DIHAPUS kapan saja secara instan!\n` +
         `   - WAJIB panggil tool delete_transaction dengan id transaksi dari DATA (misal dari daftar 'Transaksi hari ini' atau 'Daftar Transaksi').\n` +
         `   - Untuk pembatalan transfer saldo, panggil delete_transaction dengan id salah satu transaksi transfer tersebut. Sistem database akan otomatis menghapus kedua pasangan transaksi transfer dan mengembalikan saldo bank/dompet asal & tujuan ke kondisi semula!\n` +
-        `10. TARGET TABUNGAN IMPIAN & WISHLIST:\n` +
+        `11. TARGET TABUNGAN IMPIAN & WISHLIST:\n` +
         `   - JIKA user meminta "tambahkan/buat target [nominal] untuk [nama]" (misal: "tambahkan target 30jt untuk beli laptop"): WAJIB panggil tool create_saving_goal dengan name dan targetAmount.\n` +
         `   - JIKA user meminta "setor/alokasikan [nominal] ke [nama target]": WAJIB panggil tool allocate_saving_goal.\n` +
         `   - DILARANG KERAS membuat ringkasan laporan pemasukan/pengeluaran/saldo jika user HANYA meminta membuat atau menyetor target tabungan! Cukup panggil tool create_saving_goal atau allocate_saving_goal.\n` +
-        `11. NOTIFIKASI, PENGINGAT RUTIN & HAPUS TAGIHAN LUNAS:\n` +
+        `12. NOTIFIKASI, PENGINGAT RUTIN & HAPUS TAGIHAN LUNAS:\n` +
         `   - JIKA user meminta notifikasi/pengingat rutin (misal: "berikan saya notifikasi setiap minggu untuk menabung 250rb" atau "ingatkan bayar wifi 300rb tiap bulan"): WAJIB panggil tool add_subscription dengan cycle (WEEKLY/MONTHLY) dan name yang sesuai!\n` +
         `   - JIKA user minta menghapus/membatalkan tagihan karena sudah lunas/tidak dipakai (misal: "hapus tagihan Kos", "tagihan Netflix sudah lunas"): WAJIB panggil tool delete_subscription dengan name atau id tagihan!\n` +
-        `12. TARGET BUDGET (HARIAN / MINGGUAN / BULANAN / TAHUNAN):\n` +
+        `13. TARGET BUDGET (HARIAN / MINGGUAN / BULANAN / TAHUNAN):\n` +
         `   - JIKA user meminta "buat/set/atur budget [nominal] [periode]" ATAU "maksimal pengeluaran saya [nominal] [periode]" (misal: "maksimal pengeluaran harian 100rb", "set budget bulanan mamin 2jt", "maksimal pengeluaran saya 100rb"): WAJIB panggil tool set_budget dengan amount, period (DAILY/WEEKLY/MONTHLY/YEARLY), dan category (jika ada). Jika periode tidak disebutkan, asumsikan DAILY untuk kata 'maksimal harian' atau 'harian', atau default MONTHLY!\n` +
-        `13. CEGAH SALDO MINUS (SANGAT PENTING!):\n` +
+        `14. CEGAH SALDO MINUS (SANGAT PENTING!):\n` +
         `   - SEBELUM mencatat pengeluaran atau transfer, WAJIB periksa saldo dari dompet yang akan digunakan di bagian RAHASIA.\n` +
         `   - JIKA nominal pengeluaran atau transfer MELEBIHI saldo dompet saat ini, DILARANG KERAS memanggil tool record_transaction atau transfer_balance!\n` +
         `   - Tolak dengan sopan, beri tahu user bahwa saldo di dompet tersebut tidak cukup, dan sebutkan sisa saldo saat ini.\n`;
@@ -2209,7 +2209,7 @@ aiRoutes.post("/chat", async (c) => {
 
   // ─── LLM Classifier: deteksi & ekstrak transaksi dari pesan ──
   // Pre-filter: skip LLM classifier jika tidak ada indikasi amount
-  const txClass = hasPotentialAmount(effectiveMessage)
+  const txClass = shouldClassifyAsDirectTransaction(effectiveMessage)
     ? await classifyTransactionMessage(effectiveMessage, accounts)
     : null;
 
@@ -2217,11 +2217,12 @@ aiRoutes.post("/chat", async (c) => {
   // Jika LLM classifier yakin ini transaksi tapi user tidak menyebut akun, langsung minta akun.
   // Ini mencegah LLM utama mengarang akun berdasarkan histori chat.
   if (
-    txClass?.isTransaction &&
-    txClass.needsAccount &&
-    !txClass.accountId &&
-    accounts.length > 0 &&
-    !isBalanceAdjustmentRequest(effectiveMessage)
+    shouldAskForTransactionAccount({
+      message: effectiveMessage,
+      classification: txClass,
+      accountCount: accounts.length,
+      isBalanceAdjustment: isBalanceAdjustmentRequest(effectiveMessage),
+    })
   ) {
     console.log(`[AI] Fast path: Missing account for transaction. Asking user.`);
     return stream(c, async (s) => {

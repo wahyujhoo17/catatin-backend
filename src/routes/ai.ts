@@ -1596,7 +1596,11 @@ export async function buildFinancialContext(
         `   - JIKA user meminta notifikasi/pengingat rutin (misal: "berikan saya notifikasi setiap minggu untuk menabung 250rb" atau "ingatkan bayar wifi 300rb tiap bulan"): WAJIB panggil tool add_subscription dengan cycle (WEEKLY/MONTHLY) dan name yang sesuai!\n` +
         `   - JIKA user minta menghapus/membatalkan tagihan karena sudah lunas/tidak dipakai (misal: "hapus tagihan Kos", "tagihan Netflix sudah lunas"): WAJIB panggil tool delete_subscription dengan name atau id tagihan!\n` +
         `12. TARGET BUDGET (HARIAN / MINGGUAN / BULANAN / TAHUNAN):\n` +
-        `   - JIKA user meminta "buat/set/atur budget [nominal] [periode]" ATAU "maksimal pengeluaran saya [nominal] [periode]" (misal: "maksimal pengeluaran harian 100rb", "set budget bulanan mamin 2jt", "maksimal pengeluaran saya 100rb"): WAJIB panggil tool set_budget dengan amount, period (DAILY/WEEKLY/MONTHLY/YEARLY), dan category (jika ada). Jika periode tidak disebutkan, asumsikan DAILY untuk kata 'maksimal harian' atau 'harian', atau default MONTHLY!\n`;
+        `   - JIKA user meminta "buat/set/atur budget [nominal] [periode]" ATAU "maksimal pengeluaran saya [nominal] [periode]" (misal: "maksimal pengeluaran harian 100rb", "set budget bulanan mamin 2jt", "maksimal pengeluaran saya 100rb"): WAJIB panggil tool set_budget dengan amount, period (DAILY/WEEKLY/MONTHLY/YEARLY), dan category (jika ada). Jika periode tidak disebutkan, asumsikan DAILY untuk kata 'maksimal harian' atau 'harian', atau default MONTHLY!\n` +
+        `13. CEGAH SALDO MINUS (SANGAT PENTING!):\n` +
+        `   - SEBELUM mencatat pengeluaran atau transfer, WAJIB periksa saldo dari dompet yang akan digunakan di bagian RAHASIA.\n` +
+        `   - JIKA nominal pengeluaran atau transfer MELEBIHI saldo dompet saat ini, DILARANG KERAS memanggil tool record_transaction atau transfer_balance!\n` +
+        `   - Tolak dengan sopan, beri tahu user bahwa saldo di dompet tersebut tidak cukup, dan sebutkan sisa saldo saat ini.\n`;
     }
   }
 

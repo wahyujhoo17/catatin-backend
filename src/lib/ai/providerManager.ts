@@ -27,8 +27,10 @@ const PROVIDER_DEFAULTS: Record<
     baseUrl: "https://openrouter.ai/api/v1",
   },
   groq: {
-    textModel: "meta-llama/llama-4-scout-17b-16e-instruct",
-    visionModel: "meta-llama/llama-4-scout-17b-16e-instruct",
+    // Groq is intentionally excluded from every text routing order below.
+    // Keep a valid multimodal default for the provider's required model fields.
+    textModel: "qwen/qwen3.6-27b",
+    visionModel: "qwen/qwen3.6-27b",
     baseUrl: "https://api.groq.com/openai/v1",
   },
   gemini: {

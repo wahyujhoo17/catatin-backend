@@ -1,6 +1,7 @@
 import { getFirebaseAdmin } from "../lib/firebase-admin";
 import prisma from "../lib/prisma";
 import { notificationQueue } from "../lib/queue";
+import { shouldPersistNotification } from "../lib/notificationPersistence";
 
 // ─── Types ────────────────────────────────────────────────────
 export interface PushNotificationPayload {
@@ -37,7 +38,9 @@ export async function sendPushNotification(
   payload: PushNotificationPayload,
 ): Promise<{ queued: boolean; jobId?: string }> {
   // Simpan ke database terlebih dahulu (fire-and-forget)
-  persistNotifications(payload).catch(() => {});
+  if (shouldPersistNotification("enqueue")) {
+    persistNotifications(payload).catch(() => {});
+  }
 
   try {
     const job = await notificationQueue.add("push", payload, {
@@ -58,8 +61,11 @@ export async function sendPushNotification(
 export async function sendPushNotificationDirect(
   payload: PushNotificationPayload,
 ): Promise<{ sent: number; failed: number }> {
-  // Simpan ke database terlebih dahulu
-  await persistNotifications(payload);
+  // Queued notifications are persisted during enqueue. Delivery and retries
+  // must never create another in-app notification record.
+  if (shouldPersistNotification("delivery")) {
+    await persistNotifications(payload);
+  }
 
   const admin = getFirebaseAdmin();
   if (!admin) {

@@ -2,6 +2,7 @@ import prisma from "../lib/prisma";
 import { cronQueue } from "../lib/queue";
 import { sendPushNotification } from "../services/notification";
 import { aiManager } from "../lib/ai/providerManager";
+import { buildDailyRecapExpenseWhere } from "../lib/dailyRecap";
 
 export function startCronWorker(): void {
   cronQueue.process("daily-ai-alert", async (job) => {
@@ -26,11 +27,11 @@ export function startCronWorker(): void {
       // Hitung total pengeluaran hari ini
       const expensesToday = await prisma.transaction.aggregate({
         _sum: { amount: true },
-        where: {
+        where: buildDailyRecapExpenseWhere({
           userId: user.id,
-          type: "EXPENSE",
-          date: { gte: todayStart, lte: todayEnd },
-        },
+          start: todayStart,
+          end: todayEnd,
+        }),
       });
 
       const totalSpent = expensesToday._sum.amount || 0;

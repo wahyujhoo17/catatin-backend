@@ -11,7 +11,7 @@
     "db:studio": "npx prisma studio",
     "db:generate": "npx prisma generate",
     "security:migrate-ai-secrets": "tsx src/scripts/migrateAiSecrets.ts",
-    "test": "tsx --test src/lib/ai/*.test.ts"
+    "test": "tsx --test src/lib/*.test.ts src/lib/ai/*.test.ts"
   },
   "keywords": [],
   "author": "",

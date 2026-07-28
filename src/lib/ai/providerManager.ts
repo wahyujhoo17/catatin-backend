@@ -55,18 +55,22 @@ const VISION_TIER_FREE: ProviderName[] = ["groq", "gemini", "openrouter"];
 const TEXT_TIER_PAID: ProviderName[] = ["deepseek"];
 const VISION_TIER_PAID: ProviderName[] = [];
 
-// Helper to construct dynamic provider order
-function getProviderOrder(vision?: boolean): ProviderName[] {
-  const freeTier = vision ? [...VISION_TIER_FREE] : [...TEXT_TIER_FREE];
-  const paidTier = vision ? [...VISION_TIER_PAID] : [...TEXT_TIER_PAID];
-
-  // Shuffle Tier 1 (Free) to distribute rate-limit load
-  for (let i = freeTier.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [freeTier[i], freeTier[j]] = [freeTier[j], freeTier[i]];
+// Deterministic capability routing keeps classification and tool behavior
+// stable across requests. Key rotation still distributes load per provider.
+function getProviderOrder(
+  vision?: boolean,
+  reliability: ChatOptions["reliability"] = "chat",
+): ProviderName[] {
+  let order: ProviderName[];
+  if (vision || reliability === "vision") {
+    order = ["gemini", "groq", "openrouter"];
+  } else if (reliability === "tool") {
+    order = ["cerebras", "gemini", "deepseek", "sambanova"];
+  } else if (reliability === "json") {
+    order = ["gemini", "cerebras", "deepseek", "sambanova"];
+  } else {
+    order = [...TEXT_TIER_FREE, ...TEXT_TIER_PAID];
   }
-
-  const order = [...freeTier, ...paidTier];
   console.log(`[AI] Routed provider order: ${order.join(" → ")}`);
   return order;
 }
@@ -213,10 +217,14 @@ class AIProviderManager {
 
   // ─── Create OpenAI client for a specific key ──────────────
   private createClient(baseUrl: string, apiKey: string): OpenAI {
+    const configuredTimeout = Number(process.env.AI_PROVIDER_TIMEOUT_MS);
     return new OpenAI({
       baseURL: baseUrl,
       apiKey,
-      timeout: 5000, // 5s timeout — fast failover
+      timeout:
+        Number.isFinite(configuredTimeout) && configuredTimeout >= 5_000
+          ? configuredTimeout
+          : 20_000,
       maxRetries: 0, // no retry, langsung pindah provider
     });
   }
@@ -240,7 +248,10 @@ class AIProviderManager {
 
     const errors: string[] = [];
 
-    const providerOrder = getProviderOrder(options.vision);
+    const providerOrder = getProviderOrder(
+      options.vision,
+      options.reliability,
+    );
 
     for (const providerName of providerOrder) {
       const provider = this.providers.get(providerName);
@@ -264,7 +275,6 @@ class AIProviderManager {
       for (let ri = 0; ri < available.length; ri++) {
         const idx = (startIndex + ri) % available.length;
         const { key, index } = available[idx];
-
         try {
           const client = this.createClient(key.baseUrl, key.key);
           const model =
@@ -354,7 +364,10 @@ class AIProviderManager {
 
     let triedAnyProvider = false;
 
-    const providerOrder = getProviderOrder(options.vision);
+    const providerOrder = getProviderOrder(
+      options.vision,
+      options.reliability,
+    );
 
     for (const providerName of providerOrder) {
       const provider = this.providers.get(providerName);
@@ -371,6 +384,7 @@ class AIProviderManager {
       for (let ri = 0; ri < available.length; ri++) {
         const idx = (startIndex + ri) % available.length;
         const { key, index } = available[idx];
+        let emittedContent = false;
 
         try {
           triedAnyProvider = true;
@@ -407,6 +421,7 @@ class AIProviderManager {
             if (delta) {
               if (delta.content) {
                 fullContent += delta.content;
+                emittedContent = true;
                 yield {
                   type: "token",
                   content: delta.content,
@@ -461,6 +476,17 @@ class AIProviderManager {
         } catch (err: any) {
           key.failures++;
 
+          // A streamed response cannot safely fail over after visible tokens:
+          // doing so would concatenate two different model answers.
+          if (emittedContent) {
+            yield {
+              type: "error",
+              error:
+                "Koneksi AI terputus saat mengirim jawaban. Silakan coba lagi.",
+            };
+            return;
+          }
+
           if (err.status === 429) {
             let retryAfter = parseInt(err.headers?.["retry-after"], 10);
             if (isNaN(retryAfter) || retryAfter <= 0) {
@@ -482,10 +508,9 @@ class AIProviderManager {
           }
 
           if (err.status === 401) {
-            yield {
-              type: "error",
-              error: `${providerName}: invalid API key #${index + 1}`,
-            };
+            console.warn(
+              `[AI] ${providerName} key #${index + 1}: invalid API key`,
+            );
             break;
           }
 

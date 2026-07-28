@@ -38,6 +38,7 @@ export interface ChatOptions {
   jsonMode?: boolean;
   tools?: any[];
   tool_choice?: any;
+  reliability?: "chat" | "json" | "tool" | "vision";
 }
 
 export interface AIStreamEvent {

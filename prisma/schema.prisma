@@ -42,9 +42,10 @@ model User {
   deviceTokens     DeviceToken[]
   subscriptions    Subscription[]
   budgets          Budget[]
-  investmentAssets  InvestmentAsset[]
-  savingGoals       SavingGoal[]
-  notifications     Notification[]
+  investmentAssets InvestmentAsset[]
+  savingGoals      SavingGoal[]
+  notifications    Notification[]
+  aiActionRequests AiActionRequest[]
 }
 
 // ─── NOTIFICATION TYPES ─────────────────────────────────────────
@@ -267,18 +268,52 @@ model AiConversation {
 }
 
 model AiMessage {
-  id             String         @id @default(cuid())
-  conversationId String
-  conversation   AiConversation @relation(fields: [conversationId], references: [id])
-  userId         String
-  user           User           @relation(fields: [userId], references: [id])
-  role           String // USER, ASSISTANT, SYSTEM
-  content        String
-  metadata       Json? // Parsed transaction data, etc.
-  createdAt      DateTime       @default(now())
+  id              String            @id @default(cuid())
+  conversationId  String
+  conversation    AiConversation    @relation(fields: [conversationId], references: [id])
+  userId          String
+  user            User              @relation(fields: [userId], references: [id])
+  role            String // USER, ASSISTANT, SYSTEM
+  content         String
+  metadata        Json? // Parsed transaction data, etc.
+  createdAt       DateTime          @default(now())
+  proposedActions AiActionRequest[] @relation("AiActionProposalMessage")
 
   @@index([conversationId])
   @@index([userId])
+}
+
+enum AiActionStatus {
+  PENDING
+  EXECUTING
+  EXECUTED
+  CANCELLED
+  EXPIRED
+  FAILED
+}
+
+model AiActionRequest {
+  id                String         @id @default(cuid())
+  userId            String
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  proposalMessageId String?
+  proposalMessage   AiMessage?     @relation("AiActionProposalMessage", fields: [proposalMessageId], references: [id], onDelete: SetNull)
+  actionType        String
+  arguments         Json
+  title             String
+  summary           String
+  status            AiActionStatus @default(PENDING)
+  idempotencyKey    String         @unique
+  result            Json?
+  error             String?
+  expiresAt         DateTime
+  executedAt        DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([userId, status])
+  @@index([proposalMessageId])
+  @@index([expiresAt])
 }
 
 // ─── PUSH NOTIFICATIONS (Firebase Cloud Messaging) ─────────────
@@ -335,7 +370,7 @@ model SavingGoal {
   id            String    @id @default(cuid())
   userId        String
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name          String    // e.g. "Beli Laptop", "DP Rumah", "Dana Darurat"
+  name          String // e.g. "Beli Laptop", "DP Rumah", "Dana Darurat"
   targetAmount  Float
   currentAmount Float     @default(0)
   targetDate    DateTime?

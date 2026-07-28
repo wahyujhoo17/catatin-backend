@@ -4,6 +4,12 @@ import redis from "../lib/redis";
 import { authMiddleware } from "../middleware/auth";
 import { sendOtpNotification } from "../services/otp";
 import { normalizePhone } from "../lib/phone";
+import {
+  decryptAiSecret,
+  encryptAiSecret,
+  maskAiSecret,
+} from "../lib/ai/secrets";
+import { assertSafeAiBaseUrl } from "../lib/ai/safeUrl";
 
 const settingsRoutes = new Hono();
 
@@ -15,20 +21,30 @@ interface CustomAiConfig {
   enabled: boolean;
   provider: string;
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
+  apiKeyEncrypted?: string;
   model: string;
   alertThreshold?: number;
   elevenLabsApiKey?: string;
+  elevenLabsApiKeyEncrypted?: string;
 }
 
 const DEFAULT_CONFIG: CustomAiConfig = {
   enabled: false,
   provider: "openai",
   baseUrl: "",
-  apiKey: "",
   model: "",
   alertThreshold: 500000,
 };
+
+const ALLOWED_AI_PROVIDERS = new Set([
+  "openai",
+  "deepseek",
+  "groq",
+  "openrouter",
+  "ollama",
+  "custom",
+]);
 
 // ─── GET /api/settings/ai-config ─────────────────────────────
 settingsRoutes.get("/ai-config", async (c) => {
@@ -41,7 +57,23 @@ settingsRoutes.get("/ai-config", async (c) => {
 
   const config =
     (dbUser?.customAiConfig as unknown as CustomAiConfig) || DEFAULT_CONFIG;
-  return c.json(config);
+  const hasApiKey = Boolean(config.apiKeyEncrypted || config.apiKey);
+  const hasElevenLabsApiKey = Boolean(
+    config.elevenLabsApiKeyEncrypted || config.elevenLabsApiKey,
+  );
+  return c.json({
+    enabled: config.enabled === true,
+    provider: config.provider || DEFAULT_CONFIG.provider,
+    baseUrl: config.baseUrl || "",
+    model: config.model || "",
+    alertThreshold: config.alertThreshold ?? DEFAULT_CONFIG.alertThreshold,
+    apiKey: maskAiSecret(hasApiKey ? "configured" : ""),
+    elevenLabsApiKey: maskAiSecret(
+      hasElevenLabsApiKey ? "configured" : "",
+    ),
+    hasApiKey,
+    hasElevenLabsApiKey,
+  });
 });
 
 // ─── PATCH /api/settings/ai-config ───────────────────────────
@@ -49,17 +81,15 @@ settingsRoutes.patch("/ai-config", async (c) => {
   const user = c.get("user");
   const body = await c.req.json();
 
-  const { enabled, provider, baseUrl, apiKey, model, alertThreshold, elevenLabsApiKey } = body;
-
-  // Validasi jika enabled
-  if (enabled) {
-    if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
-      return c.json({ error: "API Key wajib diisi saat Custom AI aktif" }, 400);
-    }
-    if (!provider || typeof provider !== "string") {
-      return c.json({ error: "Provider wajib dipilih" }, 400);
-    }
-  }
+  const {
+    enabled,
+    provider,
+    baseUrl,
+    apiKey,
+    model,
+    alertThreshold,
+    elevenLabsApiKey,
+  } = body;
 
   // Preserve existing config to not overwrite unpassed fields like alertThreshold if it's undefined
   const dbUser = await prisma.user.findUnique({
@@ -67,15 +97,92 @@ settingsRoutes.patch("/ai-config", async (c) => {
     select: { customAiConfig: true },
   });
   const currentConfig = (dbUser?.customAiConfig as unknown as CustomAiConfig) || DEFAULT_CONFIG;
+  const selectedProvider =
+    typeof provider === "string" ? provider.trim() : currentConfig.provider;
+  const selectedBaseUrl =
+    typeof baseUrl === "string" ? baseUrl.trim() : currentConfig.baseUrl;
+  const selectedModel =
+    typeof model === "string" ? model.trim() : currentConfig.model;
+
+  if (!ALLOWED_AI_PROVIDERS.has(selectedProvider)) {
+    return c.json({ error: "Provider Custom AI tidak didukung" }, 400);
+  }
+
+  const submittedApiKey =
+    typeof apiKey === "string" && !apiKey.includes("•") ? apiKey.trim() : "";
+  const submittedElevenLabsKey =
+    typeof elevenLabsApiKey === "string" &&
+    !elevenLabsApiKey.includes("•")
+      ? elevenLabsApiKey.trim()
+      : "";
+  const existingEncryptedApiKey =
+    currentConfig.apiKeyEncrypted || currentConfig.apiKey || "";
+  const existingEncryptedElevenLabsKey =
+    currentConfig.elevenLabsApiKeyEncrypted ||
+    currentConfig.elevenLabsApiKey ||
+    "";
+
+  if (submittedApiKey.length > 10_000 || submittedElevenLabsKey.length > 10_000) {
+    return c.json({ error: "API Key terlalu panjang" }, 400);
+  }
+  if (selectedModel.length > 200 || selectedBaseUrl.length > 2_000) {
+    return c.json({ error: "Model atau Base URL terlalu panjang" }, 400);
+  }
+  const normalizedAlertThreshold =
+    alertThreshold !== undefined
+      ? Number(alertThreshold)
+      : currentConfig.alertThreshold;
+  if (
+    normalizedAlertThreshold !== undefined &&
+    (!Number.isFinite(normalizedAlertThreshold) ||
+      normalizedAlertThreshold < 0 ||
+      normalizedAlertThreshold > 1_000_000_000_000_000)
+  ) {
+    return c.json({ error: "Batas peringatan tidak valid" }, 400);
+  }
+
+  if (enabled) {
+    if (!submittedApiKey && !existingEncryptedApiKey) {
+      return c.json({ error: "API Key wajib diisi saat Custom AI aktif" }, 400);
+    }
+    if (!selectedBaseUrl) {
+      return c.json({ error: "Base URL wajib diisi saat Custom AI aktif" }, 400);
+    }
+    try {
+      await assertSafeAiBaseUrl(selectedBaseUrl);
+    } catch (error) {
+      return c.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Base URL Custom AI tidak aman",
+        },
+        400,
+      );
+    }
+  }
 
   const config: CustomAiConfig = {
     enabled: enabled === true,
-    provider: provider || DEFAULT_CONFIG.provider,
-    baseUrl: (baseUrl || "").trim(),
-    apiKey: (apiKey || "").trim(),
-    model: (model || "").trim(),
-    alertThreshold: alertThreshold !== undefined ? Number(alertThreshold) : currentConfig.alertThreshold,
-    elevenLabsApiKey: elevenLabsApiKey !== undefined ? (elevenLabsApiKey as string).trim() : currentConfig.elevenLabsApiKey,
+    provider: selectedProvider || DEFAULT_CONFIG.provider,
+    baseUrl: selectedBaseUrl,
+    apiKeyEncrypted: submittedApiKey
+      ? encryptAiSecret(submittedApiKey)
+      : existingEncryptedApiKey.startsWith("v1:")
+        ? existingEncryptedApiKey
+        : existingEncryptedApiKey
+          ? encryptAiSecret(decryptAiSecret(existingEncryptedApiKey))
+          : undefined,
+    model: selectedModel,
+    alertThreshold: normalizedAlertThreshold,
+    elevenLabsApiKeyEncrypted: submittedElevenLabsKey
+      ? encryptAiSecret(submittedElevenLabsKey)
+      : existingEncryptedElevenLabsKey.startsWith("v1:")
+        ? existingEncryptedElevenLabsKey
+        : existingEncryptedElevenLabsKey
+          ? encryptAiSecret(decryptAiSecret(existingEncryptedElevenLabsKey))
+          : undefined,
   };
 
   await prisma.user.update({
@@ -83,7 +190,20 @@ settingsRoutes.patch("/ai-config", async (c) => {
     data: { customAiConfig: config as any },
   });
 
-  return c.json({ success: true, config });
+  return c.json({
+    success: true,
+    config: {
+      enabled: config.enabled,
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      alertThreshold: config.alertThreshold,
+      apiKey: maskAiSecret(config.apiKeyEncrypted),
+      elevenLabsApiKey: maskAiSecret(config.elevenLabsApiKeyEncrypted),
+      hasApiKey: Boolean(config.apiKeyEncrypted),
+      hasElevenLabsApiKey: Boolean(config.elevenLabsApiKeyEncrypted),
+    },
+  });
 });
 
 // ─── HELPERS: rate limiter khusus OTP profile ─────────────────

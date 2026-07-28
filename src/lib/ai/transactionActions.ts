@@ -2,6 +2,8 @@ import prisma from "../prisma";
 import { clearUserAiCache } from "../redis";
 import { cronQueue } from "../queue";
 import { checkAndTriggerBudgetAlerts } from "../../services/budgetAlert";
+import { validateAiToolCall } from "./actionRequests";
+import { decryptAiSecret, encryptAiSecret } from "./secrets";
 
 export const processTransactionActions = async (toolCalls: any[], userId: string, accounts: any[]) => {
   const processedEvents: any[] = [];
@@ -10,8 +12,9 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
     if (!toolCall.function || !toolCall.function.name) continue;
 
     try {
-      const actionType = toolCall.function.name;
-      const parsed = JSON.parse(toolCall.function.arguments);
+      const normalizedCall = validateAiToolCall(toolCall);
+      const actionType = normalizedCall.function.name;
+      const parsed = JSON.parse(normalizedCall.function.arguments);
       
       if (actionType === "delete_transaction") {
         if (accounts.length === 0) continue;
@@ -64,6 +67,36 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         });
 
         await prisma.$transaction(async (tx) => {
+          const balanceDeltas = new Map<string, number>();
+          for (const item of relatedTxs) {
+            if (!item.accountId) continue;
+            const delta =
+              item.type === "INCOME" || item.type === "DEBT"
+                ? -item.amount
+                : item.amount;
+            balanceDeltas.set(
+              item.accountId,
+              (balanceDeltas.get(item.accountId) || 0) + delta,
+            );
+          }
+          const affectedAccounts = await tx.account.findMany({
+            where: {
+              userId,
+              id: { in: [...balanceDeltas.keys()] },
+            },
+            select: { id: true, balance: true },
+          });
+          for (const [accountId, delta] of balanceDeltas) {
+            const account = affectedAccounts.find(
+              (item) => item.id === accountId,
+            );
+            if (!account || account.balance + delta < 0) {
+              throw new Error(
+                "Transaksi tidak dapat dihapus karena akan membuat saldo negatif",
+              );
+            }
+          }
+
           for (const item of relatedTxs) {
             // Revert account balance
             if (item.accountId) {
@@ -117,45 +150,53 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         }
 
         const updatedTx = await prisma.$transaction(async (tx) => {
-          // Revert old balance for target
+          const effect = (type: string, value: number) =>
+            type === "INCOME" || type === "DEBT" ? value : -value;
+          const balanceDeltas = new Map<string, number>();
           if (existingTx.accountId) {
-            const oldDelta = existingTx.type === "INCOME" || existingTx.type === "DEBT" ? -existingTx.amount : existingTx.amount;
-            await tx.account.update({
-              where: { id: existingTx.accountId },
-              data: { balance: { increment: oldDelta } },
-            });
+            balanceDeltas.set(
+              existingTx.accountId,
+              effect(existingTx.type, newAmount) -
+                effect(existingTx.type, existingTx.amount),
+            );
+          }
+          if (peerTx?.accountId) {
+            balanceDeltas.set(
+              peerTx.accountId,
+              (balanceDeltas.get(peerTx.accountId) || 0) +
+                effect(peerTx.type, newAmount) -
+                effect(peerTx.type, peerTx.amount),
+            );
+          }
+          const affectedAccounts = await tx.account.findMany({
+            where: {
+              userId,
+              id: { in: [...balanceDeltas.keys()] },
+            },
+            select: { id: true, balance: true },
+          });
+          for (const [accountId, delta] of balanceDeltas) {
+            const account = affectedAccounts.find(
+              (item) => item.id === accountId,
+            );
+            if (!account || account.balance + delta < 0) {
+              throw new Error(
+                "Perubahan transaksi akan membuat saldo negatif",
+              );
+            }
+            if (delta !== 0) {
+              await tx.account.update({
+                where: { id: accountId },
+                data: { balance: { increment: delta } },
+              });
+            }
           }
           if (existingTx.customerId && existingTx.type === "DEBT") {
             await tx.customer.update({
               where: { id: existingTx.customerId },
-              data: { debt: { decrement: existingTx.amount } }
-            });
-          }
-
-          // Revert old balance for peer
-          if (peerTx && peerTx.accountId) {
-            const peerOldDelta = peerTx.type === "INCOME" || peerTx.type === "DEBT" ? -peerTx.amount : peerTx.amount;
-            await tx.account.update({
-              where: { id: peerTx.accountId },
-              data: { balance: { increment: peerOldDelta } },
-            });
-          }
-
-          // Add new balance for target
-          if (existingTx.accountId) {
-            const newDelta = existingTx.type === "INCOME" || existingTx.type === "DEBT" ? newAmount : -newAmount;
-            await tx.account.update({
-              where: { id: existingTx.accountId },
-              data: { balance: { increment: newDelta } },
-            });
-          }
-
-          // Add new balance for peer
-          if (peerTx && peerTx.accountId) {
-            const peerNewDelta = peerTx.type === "INCOME" || peerTx.type === "DEBT" ? newAmount : -newAmount;
-            await tx.account.update({
-              where: { id: peerTx.accountId },
-              data: { balance: { increment: peerNewDelta } },
+              data: {
+                debt: { increment: newAmount - existingTx.amount },
+              },
             });
           }
 
@@ -198,43 +239,49 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           console.warn(`[AI] Invalid transfer accounts: ${fromAccountId} -> ${toAccountId}`);
           continue;
         }
-
-        // Cari atau buat kategori transfer
-        let catOutId: string | null = null;
-        let catInId: string | null = null;
-
-        const catOut = await prisma.category.findFirst({ where: { userId, name: "Transfer Keluar" } });
-        if (catOut) catOutId = catOut.id;
-        else {
-          const newCat = await prisma.category.create({ data: { userId, name: "Transfer Keluar", type: "EXPENSE" } });
-          catOutId = newCat.id;
-        }
-
-        const catIn = await prisma.category.findFirst({ where: { userId, name: "Transfer Masuk" } });
-        if (catIn) catInId = catIn.id;
-        else {
-          const newCat = await prisma.category.create({ data: { userId, name: "Transfer Masuk", type: "INCOME" } });
-          catInId = newCat.id;
+        if (fromAcc.id === toAcc.id) {
+          processedEvents.push({
+            action: "error",
+            message: "Akun asal dan tujuan transfer harus berbeda",
+          });
+          continue;
         }
 
         const transferTx = await prisma.$transaction(async (tx) => {
+          const catOut = await tx.category.upsert({
+            where: { userId_name: { userId, name: "Transfer Keluar" } },
+            update: {},
+            create: { userId, name: "Transfer Keluar", type: "EXPENSE" },
+          });
+          const catIn = await tx.category.upsert({
+            where: { userId_name: { userId, name: "Transfer Masuk" } },
+            update: {},
+            create: { userId, name: "Transfer Masuk", type: "INCOME" },
+          });
           const expenseTx = await tx.transaction.create({
             data: {
               userId,
               type: "EXPENSE",
               amount,
               description: description || `Transfer ke ${toAcc.name}`,
-              categoryId: catOutId,
+              categoryId: catOut.id,
               accountId: fromAcc.id,
               source: "CHAT",
               isTransfer: true,
               date: new Date(),
             }
           });
-          await tx.account.update({
-            where: { id: fromAcc.id },
+          const debited = await tx.account.updateMany({
+            where: {
+              id: fromAcc.id,
+              userId,
+              balance: { gte: amount },
+            },
             data: { balance: { decrement: amount } }
           });
+          if (debited.count !== 1) {
+            throw new Error("Saldo akun asal tidak mencukupi");
+          }
 
           const incomeTx = await tx.transaction.create({
             data: {
@@ -242,7 +289,7 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
               type: "INCOME",
               amount,
               description: description || `Transfer dari ${fromAcc.name}`,
-              categoryId: catInId,
+              categoryId: catIn.id,
               accountId: toAcc.id,
               source: "CHAT",
               isTransfer: true,
@@ -301,7 +348,7 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
       }
 
       // --- delete_subscription ---
-      if (actionType === "delete_subscription" || actionType === "remove_subscription") {
+      if (actionType === "delete_subscription") {
         const { id, name } = parsed;
         let sub = await prisma.subscription.findFirst({
           where: {
@@ -325,7 +372,7 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
               (searchKeyword.includes("menabung") && subName.includes("tabung")) ||
               (searchKeyword.includes("tabung") && subName.includes("menabung"))
             );
-          }) || (allSubs.length === 1 ? allSubs[0] : null);
+          }) || null;
         }
 
         if (!sub) {
@@ -351,10 +398,34 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
 
         const userObj = await prisma.user.findUnique({ where: { id: userId }, select: { customAiConfig: true } });
         const config = (userObj?.customAiConfig as any) || { enabled: false, provider: "openai", baseUrl: "", apiKey: "", model: "" };
+        const {
+          apiKey,
+          elevenLabsApiKey,
+          ...configWithoutPlaintextSecrets
+        } = config;
+        const secureConfig = {
+          ...configWithoutPlaintextSecrets,
+          ...(config.apiKeyEncrypted || apiKey
+            ? {
+                apiKeyEncrypted:
+                  config.apiKeyEncrypted ||
+                  encryptAiSecret(decryptAiSecret(apiKey)),
+              }
+            : {}),
+          ...(config.elevenLabsApiKeyEncrypted || elevenLabsApiKey
+            ? {
+                elevenLabsApiKeyEncrypted:
+                  config.elevenLabsApiKeyEncrypted ||
+                  encryptAiSecret(decryptAiSecret(elevenLabsApiKey)),
+              }
+            : {}),
+        };
         
         await prisma.user.update({
           where: { id: userId },
-          data: { customAiConfig: { ...config, alertThreshold: threshold } }
+          data: {
+            customAiConfig: { ...secureConfig, alertThreshold: threshold },
+          },
         });
 
         processedEvents.push({
@@ -376,11 +447,6 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           });
           if (existingCat) {
             categoryId = existingCat.id;
-          } else {
-            const newCat = await prisma.category.create({
-              data: { userId, name: catName, type: "EXPENSE" }
-            });
-            categoryId = newCat.id;
           }
         }
 
@@ -431,7 +497,14 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           const existingCat = await prisma.category.findFirst({
             where: { userId, name: catName }
           });
-          if (existingCat) categoryId = existingCat.id;
+          if (!existingCat) {
+            processedEvents.push({
+              action: "error",
+              message: `Kategori budget "${catName}" tidak ditemukan`,
+            });
+            continue;
+          }
+          categoryId = existingCat.id;
         }
 
         const existingBudget = await prisma.budget.findFirst({
@@ -464,8 +537,12 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           const acc = accounts.find((a) => a.id === accountId || a.name.toLowerCase() === accountId.toLowerCase());
           if (acc) finalAccountId = acc.id;
         }
-        if (!finalAccountId && accounts.length > 0) {
-          finalAccountId = accounts[0].id;
+        if (!finalAccountId) {
+          processedEvents.push({
+            action: "error",
+            message: "Akun pembayaran split bill wajib dipilih",
+          });
+          continue;
         }
 
         let categoryId: string | null = null;
@@ -486,6 +563,15 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         const splitGroupId = "split-" + Date.now() + "-" + Math.random().toString(36).substring(2, 7);
 
         const createdSplitTxs = await prisma.$transaction(async (tx) => {
+          let resolvedCategoryId = categoryId;
+          if (!resolvedCategoryId && catName) {
+            const category = await tx.category.upsert({
+              where: { userId_name: { userId, name: catName } },
+              update: {},
+              create: { userId, name: catName, type: "EXPENSE" },
+            });
+            resolvedCategoryId = category.id;
+          }
           // 1. Create base Expense transaction
           const mainTx = await tx.transaction.create({
             data: {
@@ -493,7 +579,7 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
               type: "EXPENSE",
               amount: totalAmount,
               description,
-              categoryId,
+              categoryId: resolvedCategoryId,
               accountId: finalAccountId,
               source: "CHAT",
               splitGroupId,
@@ -501,11 +587,16 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
             }
           });
 
-          if (finalAccountId) {
-            await tx.account.update({
-              where: { id: finalAccountId },
-              data: { balance: { decrement: totalAmount } }
-            });
+          const debited = await tx.account.updateMany({
+            where: {
+              id: finalAccountId,
+              userId,
+              balance: { gte: totalAmount },
+            },
+            data: { balance: { decrement: totalAmount } },
+          });
+          if (debited.count !== 1) {
+            throw new Error("Saldo akun pembayaran tidak mencukupi");
           }
 
           // 2. Create DEBT transactions per target person
@@ -618,18 +709,32 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         if (!goalId || typeof amount !== "number" || amount <= 0) continue;
 
         // Find goal by ID or name
-        const existingGoal = await prisma.savingGoal.findFirst({
+        const matchingGoals = await prisma.savingGoal.findMany({
           where: {
             userId,
             OR: [
               { id: goalId },
               { name: { contains: goalId, mode: "insensitive" } }
             ]
-          }
+          },
+          take: 3,
         });
+        const exactGoal = matchingGoals.find(
+          (goal) =>
+            goal.id === goalId ||
+            goal.name.toLowerCase() === String(goalId).toLowerCase(),
+        );
+        const existingGoal =
+          exactGoal || (matchingGoals.length === 1 ? matchingGoals[0] : null);
 
         if (!existingGoal) {
-          console.warn(`[AI] Saving goal not found: ${goalId}`);
+          processedEvents.push({
+            action: "error",
+            message:
+              matchingGoals.length > 1
+                ? "Nama target tabungan ambigu"
+                : "Target tabungan tidak ditemukan",
+          });
           continue;
         }
 
@@ -703,18 +808,6 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           });
           if (existingCat) {
             categoryId = existingCat.id;
-          } else {
-            // Hanya buat kategori di DB jika bukan DRAFT
-            if (actionType === "record_transaction") {
-               const newCat = await prisma.category.create({
-                 data: {
-                   userId: userId,
-                   name: catName,
-                   type: type as any,
-                 },
-               });
-               categoryId = newCat.id;
-            }
           }
         }
 
@@ -739,14 +832,23 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         }
 
         // Buat transaksi
-        const newTx = await prisma.$transaction(async (tx) => {
+        const transactionResult = await prisma.$transaction(async (tx) => {
+          let resolvedCategoryId = categoryId;
+          if (!resolvedCategoryId && catName) {
+            const category = await tx.category.upsert({
+              where: { userId_name: { userId, name: catName } },
+              update: {},
+              create: { userId, name: catName, type: type as any },
+            });
+            resolvedCategoryId = category.id;
+          }
           const created = await tx.transaction.create({
             data: {
               userId: userId,
               type: type as any,
               amount,
               description,
-              categoryId,
+              categoryId: resolvedCategoryId,
               accountId: finalAccountId,
               source: "CHAT",
               date: new Date(),
@@ -754,14 +856,29 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
           });
           
           if (finalAccountId) {
-            const delta = type === "INCOME" || type === "DEBT" ? amount : -amount;
-            await tx.account.update({
-              where: { id: finalAccountId },
-              data: { balance: { increment: delta } },
+            const isExpense = type === "EXPENSE";
+            const updated = await tx.account.updateMany({
+              where: {
+                id: finalAccountId,
+                userId,
+                ...(isExpense ? { balance: { gte: amount } } : {}),
+              },
+              data: {
+                balance: { increment: isExpense ? -amount : amount },
+              },
             });
+            if (updated.count !== 1) {
+              throw new Error(
+                isExpense
+                  ? "Saldo akun tidak mencukupi"
+                  : "Akun transaksi tidak ditemukan",
+              );
+            }
           }
-          return created;
+          return { created, resolvedCategoryId };
         });
+        const newTx = transactionResult.created;
+        categoryId = transactionResult.resolvedCategoryId;
 
         // Trigger real-time & cumulative budget alerts
         if (String(type).toUpperCase() === "EXPENSE") {
@@ -780,7 +897,18 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         });
       }
     } catch (parseErr) {
-      console.warn("[AI] Gagal parse action JSON:", parseErr);
+      const errorName =
+        parseErr instanceof Error ? parseErr.constructor.name : "";
+      const message =
+        errorName === "ZodError"
+          ? "Parameter aksi AI tidak valid"
+          : errorName.startsWith("Prisma")
+            ? "Data berubah saat aksi diproses. Silakan coba lagi."
+            : parseErr instanceof Error
+              ? parseErr.message
+              : "Parameter aksi AI tidak valid";
+      console.warn("[AI] Gagal memproses aksi:", message);
+      processedEvents.push({ action: "error", message });
     }
   }
 
@@ -806,13 +934,19 @@ export type TransactionActionType =
   | "draft_transaction"
   | "transfer_balance"
   | "add_subscription"
+  | "delete_subscription"
   | "set_alert_threshold"
-  | "adjust_balance";
+  | "adjust_balance"
+  | "set_budget"
+  | "delete_budget"
+  | "split_bill"
+  | "create_saving_goal"
+  | "allocate_saving_goal";
 
 export function stripActions(content: string): string {
   // Since we use native function calling now, the content usually won't have [ACTION] blocks.
   // But we keep this for backward compatibility with old chat history just in case.
   return content
-    .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription|set_alert_threshold|adjust_balance)\][\s\S]*?\[\/ACTION\]/g, "")
+    .replace(/\[ACTION:(record_transaction|update_transaction|delete_transaction|draft_transaction|transfer_balance|add_subscription|delete_subscription|set_alert_threshold|adjust_balance|set_budget|delete_budget|split_bill|create_saving_goal|allocate_saving_goal)\][\s\S]*?\[\/ACTION\]/g, "")
     .trim();
 }

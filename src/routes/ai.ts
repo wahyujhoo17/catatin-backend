@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
-import { z } from "zod";
 import prisma from "../lib/prisma";
 import redis, { clearUserAiCache } from "../lib/redis";
 import { authMiddleware } from "../middleware/auth";
@@ -15,6 +14,10 @@ import {
   validateAiToolCall,
 } from "../lib/ai/actionRequests";
 import { formatAiHistoryMessage } from "../lib/ai/actionHistory";
+import {
+  chatRequestSchema,
+  syncChatRequestSchema,
+} from "../lib/ai/requestSchemas";
 import {
   processTransactionActions,
   stripActions,
@@ -57,34 +60,6 @@ async function getUserCustomProvider(
 
 // ─── All AI routes require auth ───────────────────────────────
 aiRoutes.use("*", authMiddleware);
-
-const imageDataSchema = z
-  .string()
-  .max(8 * 1024 * 1024)
-  .regex(/^data:image\/(?:jpeg|png|webp);base64,/i);
-const chatHistoryItemSchema = z.union([
-  z.object({
-    type: z.enum(["user", "bot", "error"]),
-    text: z.string().max(4_000),
-  }),
-  z.object({
-    role: z.enum(["user", "assistant"]),
-    content: z.string().max(4_000),
-  }),
-]);
-const chatRequestSchema = z.object({
-  message: z.string().trim().min(1).max(4_000),
-  conversationId: z.string().max(128).optional(),
-  requestId: z.string().min(8).max(128).optional(),
-  image: imageDataSchema.optional(),
-  history: z.array(chatHistoryItemSchema).max(10).optional().default([]),
-});
-const syncChatRequestSchema = z.object({
-  message: z.string().trim().min(1).max(4_000),
-  requestId: z.string().min(8).max(128).optional(),
-  image: imageDataSchema.optional(),
-  draft: z.string().max(4_000).optional(),
-});
 
 async function checkAiUserRateLimit(userId: string): Promise<boolean> {
   if (!redis) return true;

@@ -27,6 +27,10 @@ import {
   processTransactionActions,
   stripActions,
 } from "../lib/ai/transactionActions";
+import {
+  assessToolConfirmation,
+  REQUIRED_TOOL_INSTRUCTION,
+} from "../lib/ai/toolConfirmation";
 
 const aiRoutes = new Hono();
 
@@ -2596,6 +2600,57 @@ aiRoutes.post("/chat", async (c) => {
         }
       }
 
+      const confirmationAssessment = assessToolConfirmation({
+        actionMode: hasTools,
+        toolCallCount: finalToolCalls.length,
+        modelText: fullResponse,
+      });
+      fullResponse = confirmationAssessment.safeText;
+      if (confirmationAssessment.needsRequiredToolRetry) {
+        const requiredToolInstruction: ChatMessage = {
+          role: "system",
+          content: REQUIRED_TOOL_INSTRUCTION,
+        };
+        const requiredToolMessages = [
+          messages[0],
+          requiredToolInstruction,
+          ...messages.slice(1),
+        ];
+
+        try {
+          if (customProvider) {
+            const retryResult = await callCustomProviderSync(
+              requiredToolMessages,
+              customProvider,
+              {
+                tools: aiTools,
+                tool_choice: "required",
+              },
+            );
+            if (retryResult.tool_calls.length > 0) {
+              finalToolCalls = retryResult.tool_calls;
+              fullResponse = retryResult.content || "";
+            }
+          } else {
+            const retryResult = await aiManager.chat(requiredToolMessages, {
+              ...chatOptions,
+              tool_choice: "required",
+            });
+            if (retryResult.tool_calls?.length) {
+              finalToolCalls = retryResult.tool_calls;
+              fullResponse = retryResult.content || "";
+            }
+          }
+        } catch (retryError) {
+          console.warn(
+            "[AI] Required tool retry failed:",
+            retryError instanceof Error
+              ? retryError.message
+              : "unknown error",
+          );
+        }
+      }
+
       // ─── Safety net: hapus ID internal yang mungkin bocor ──
       fullResponse = stripLeakedIds(fullResponse);
 
@@ -3080,6 +3135,7 @@ aiRoutes.post("/chat/sync", async (c) => {
       tool_choice: hasTools ? "auto" : undefined,
       reliability: hasTools ? ("tool" as const) : ("chat" as const),
     };
+    let logicMessages: ChatMessage[] = [systemPrompt, userMessage];
 
     if (image) {
       // ─── 2-Step Pipeline: Vision OCR -> Text Logic ───
@@ -3114,17 +3170,18 @@ aiRoutes.post("/chat/sync", async (c) => {
         role: "user",
         content: `${message}\n\n=== TEKS STRUK ===\n${extractedText}`,
       };
+      logicMessages = [systemPrompt, finalUserMessage];
 
       if (customProvider) {
         const result = await callCustomProviderSync(
-          [systemPrompt, finalUserMessage],
+          logicMessages,
           customProvider,
           chatOptions,
         );
         content = result.content;
         toolCalls = result.tool_calls as any[];
       } else {
-        const result = await aiManager.chat([systemPrompt, finalUserMessage], { ...chatOptions, vision: false });
+        const result = await aiManager.chat(logicMessages, { ...chatOptions, vision: false });
         content = result.content;
         toolCalls = result.tool_calls || [];
       }
@@ -3132,16 +3189,64 @@ aiRoutes.post("/chat/sync", async (c) => {
       // ─── Normal 1-Step Pipeline (Hanya Teks) ───
       if (customProvider) {
         const result = await callCustomProviderSync(
-          [systemPrompt, userMessage],
+          logicMessages,
           customProvider,
           chatOptions,
         );
         content = result.content;
         toolCalls = result.tool_calls as any[];
       } else {
-        const result = await aiManager.chat([systemPrompt, userMessage], { ...chatOptions, vision: false });
+        const result = await aiManager.chat(logicMessages, { ...chatOptions, vision: false });
         content = result.content;
         toolCalls = result.tool_calls || [];
+      }
+    }
+
+    const confirmationAssessment = assessToolConfirmation({
+      actionMode: hasTools,
+      toolCallCount: toolCalls.length,
+      modelText: content,
+    });
+    content = confirmationAssessment.safeText;
+    if (confirmationAssessment.needsRequiredToolRetry) {
+      const requiredToolMessages = [
+        logicMessages[0],
+        {
+          role: "system" as const,
+          content: REQUIRED_TOOL_INSTRUCTION,
+        },
+        ...logicMessages.slice(1),
+      ];
+
+      try {
+        if (customProvider) {
+          const retryResult = await callCustomProviderSync(
+            requiredToolMessages,
+            customProvider,
+            {
+              tools: aiTools,
+              tool_choice: "required",
+            },
+          );
+          if (retryResult.tool_calls.length > 0) {
+            toolCalls = retryResult.tool_calls as any[];
+            content = retryResult.content || "";
+          }
+        } else {
+          const retryResult = await aiManager.chat(requiredToolMessages, {
+            ...chatOptions,
+            tool_choice: "required",
+          });
+          if (retryResult.tool_calls?.length) {
+            toolCalls = retryResult.tool_calls;
+            content = retryResult.content || "";
+          }
+        }
+      } catch (retryError) {
+        console.warn(
+          "[AI] Required sync tool retry failed:",
+          retryError instanceof Error ? retryError.message : "unknown error",
+        );
       }
     }
 

@@ -185,8 +185,12 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
       // --- transfer_balance ---
       if (actionType === "transfer_balance") {
         if (accounts.length === 0) continue;
-        const { fromAccountId, toAccountId, amount, description } = parsed;
+        let { fromAccountId, toAccountId, amount, description } = parsed;
         if (!fromAccountId || !toAccountId || !amount || amount <= 0) continue;
+
+        // Strip out brackets if AI accidentally includes them
+        fromAccountId = fromAccountId.replace(/[\[\]]/g, "");
+        toAccountId = toAccountId.replace(/[\[\]]/g, "");
 
         const fromAcc = accounts.find((a) => a.id === fromAccountId || a.name.toLowerCase() === fromAccountId.toLowerCase());
         const toAcc = accounts.find((a) => a.id === toAccountId || a.name.toLowerCase() === toAccountId.toLowerCase());
@@ -670,13 +674,14 @@ export const processTransactionActions = async (toolCalls: any[], userId: string
         // Validasi accountId jika diberikan
         let finalAccountId: string | null = null;
         if (accountId && typeof accountId === "string") {
+          const cleanAccountId = accountId.replace(/[\[\]]/g, "");
           const acc = accounts.find(
-            (a) => a.id === accountId || a.name.toLowerCase() === accountId.toLowerCase()
+            (a) => a.id === cleanAccountId || a.name.toLowerCase() === cleanAccountId.toLowerCase()
           );
           if (acc) {
             finalAccountId = acc.id;
           } else {
-            console.warn(`[AI] accountId ${accountId} tidak valid, abaikan`);
+            console.warn(`[AI] accountId ${cleanAccountId} tidak valid, abaikan`);
           }
         }
         // Cegah auto-assign akun! Jika AI tidak menyebutkan dompet (kecuali draft_transaction), paksa gagal agar AI bertanya.

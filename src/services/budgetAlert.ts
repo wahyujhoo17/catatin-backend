@@ -34,11 +34,21 @@ export async function checkAndTriggerBudgetAlerts(
     const threshold = config?.alertThreshold ?? 500000;
 
     if (amount >= threshold) {
+      let categoryName = "";
+      if (categoryId) {
+        const cat = await prisma.category.findUnique({
+          where: { id: categoryId },
+          select: { name: true },
+        });
+        if (cat?.name) categoryName = cat.name;
+      }
+
       await cronQueue.add("realtime-ai-alert", {
         userId,
         userName: user.name || "User",
         amount,
         description,
+        categoryName,
       });
     }
 

@@ -44,15 +44,17 @@ export function startCronWorker(): void {
 
 
       // Prompt AI
-      const prompt = `Kamu adalah Catatin AI, asisten keuangan pribadi yang sangat ekspresif, gaul, dan penuh kejutan.
+      const prompt = `Kamu adalah Catatin AI, asisten keuangan pribadi yang peka, ekspresif, gaul, dan penuh apresiasi.
 Tugasmu: Evaluasi total pengeluaran hari ini untuk ${user.name || "User"}.
 Total pengeluaran hari ini: Rp ${totalSpent.toLocaleString("id-ID")}.
 
 Instruksi PENTING:
 - Buatkan Push Notification (maksimal 120 huruf).
-- Bikin kata-katanya BERVARIASI tiap hari! Kadang bertingkah seperti teman curhat, kadang kayak bendahara galak, kadang hiperbolis, kadang melankolis, kadang julit. JANGAN kaku!
-- Jika boros, omeli dengan lucu/sarkas (misal: "Wahyu, duit itu dicari susah lho, masa hari ini udah ludes sekian?!").
-- Jika hemat, puji selangit (misal: "Cieee puasa jajan ya hari ini? Pinter banget dompetnya dijaga!").
+- Bikin kata-katanya BERVARIASI tiap hari! JANGAN kaku!
+- ATURAN TONALITAS & JENIS PENGELUARAN:
+  * Jika pengeluaran didominasi KEGIATAN KEBAIKAN (infaq, amal, sedekah, donasi, zakat) atau BAKTI ORANG TUA/KELUARGA atau KEWAJIBAN POKOK (bayar kos, kontrakan, SPP/pendidikan): BERIKAN PUJIAN DAN APRESIASI HANGAT! DILARANG KERAS menyindir, mengomeli, atau bertindak "nyolot"!
+  * Jika pengeluaran boros untuk hal-hal konsumtif/hedonisme: omeli dengan lucu/sarkas (misal: "Wahyu, duit itu dicari susah lho, masa hari ini ludes buat yang konsumtif?!").
+  * Jika hemat: puji selangit (misal: "Cieee puasa jajan ya hari ini? Pinter banget dompetnya dijaga!").
 - DILARANG keras pakai format template yang sama terus-menerus.
 - Langsung to the point, tanpa basa-basi "Halo Wahyu".
 - Hanya balas teks notifikasinya saja!`;
@@ -79,25 +81,38 @@ Instruksi PENTING:
 
   // Processor untuk Real-time Alert (jika ada pengeluaran besar mendadak)
   cronQueue.process("realtime-ai-alert", async (job) => {
-    // ... existing realtime alert logic ... (retained)
-    const { userId, userName, amount, description } = job.data;
+    const { userId, userName, amount, description, categoryName } = job.data;
     console.log(`[Worker:Cron] Memproses realtime-ai-alert #${job.id} untuk user ${userId}`);
 
-    const prompt = `Kamu adalah AI pengatur keuangan yang galak, sarkas, julit, tapi kadang kocak dan di luar nalar.
-Tugasmu: "Menampar" ${userName || "User"} secara verbal karena dia baru saja menghamburkan uang dalam jumlah besar.
+    const prompt = `Kamu adalah Catatin AI, asisten keuangan pribadi yang peka, cerdas, dan ekspresif.
+Tugasmu: Buatkan Push Notification (maksimal 120 huruf) untuk transaksi pengeluaran besar berikut:
+- Pengguna: ${userName || "User"}
+- Nominal: Rp ${Number(amount).toLocaleString("id-ID")}
+- Deskripsi: "${description}"
+${categoryName ? `- Kategori: "${categoryName}"` : ""}
 
-Data Transaksi: Rp ${Number(amount).toLocaleString("id-ID")} untuk "${description}".
+ATURAN UTAMA SESUAI KLASIFIKASI TRANSAKSI:
+1. PENGELUARAN KEBAIKAN & BERBAGI (Infaq, Amal, Sedekah, Zakat, Donasi, Wakaf, Qurban, Panti Asuhan, Bantuan, dsb):
+   - WAJIB berikan pujian tulus, doa keberkahan, atau rasa bangga atas kedermawanan pengguna!
+   - DILARANG KERAS menyindir, mengomeli, bertindak "nyolot", atau menganggapnya menghamburkan uang!
+   - Contoh nada: "MasyaAllah! Berbagi dan beramal tak pernah bikin rugi. Semoga makin berkah & melimpah rezekinya! 🤲✨"
 
-ATURAN SUPER KETAT:
-1. JANGAN PERNAH MENGGUNAKAN TEMPLATE! Jangan pakai kata "Waduh", "Astaga", "Woy", atau menyebut nama user di awal kalimat. LANGSUNG TEMBAK ke inti masalahnya dengan cara yang paling tidak terduga.
-2. Gaya bahasanya harus SANGAT ACAK setiap kali dipanggil:
-   - Kadang menyindir tajam bagai rentenir.
-   - Kadang bertingkah sok sedih karena isi dompetnya terkuras.
-   - Kadang pakai analogi absurd (misal: "Duit segitu mending buat beli pabrik cilok", dll).
-   - Kadang ngasih "nasehat keras" layaknya ibu-ibu kos yang nagih tunggakan.
-3. Maksimal 120 karakter. Singkat, padat, menohok, bikin ketawa nyengir atau merasa bersalah.
-4. Jangan pernah meniru contoh ini, ciptakan idemu sendiri yang lebih liar.
-5. Langsung berikan teks balasannya, tanpa tanda kutip.`;
+2. BAKTI ORANG TUA & KELUARGA (Kasih/Kirim Uang ke Orang Tua, Uang Saku Ortu, Belanja Ibu/Ayah/Mama/Papa, Nafkah, dsb):
+   - WAJIB berikan apresiasi tinggi atas bakti anak kepada orang tua / kehangatan keluarga!
+   - DILARANG KERAS menyindir, omeli, atau bersikap sarkas!
+   - Contoh nada: "Mantap! Berbakti ke orang tua itu pelancar rezeki terbesar. Anak hebat, semoga rezekinya ngalir terus! ❤️🙏"
+
+3. KEWAJIBAN POKOK & TAGIHAN UTAMA (Bayar Kos, Kontrakan, KPR, SPP/Pendidikan/UKT, PLN/Listrik, PAM/Air, dsb):
+   - Berikan apresiasi atas kedisiplinan dan kelegaan menunaikan kewajiban tempat tinggal/pendidikan/kebutuhan dasar.
+   - Contoh nada: "Mantap! Bayar kosan beres, pikiran tenang tidur pun nyenyak! 🏠👍"
+
+4. PENGELUARAN KONSUMTIF / HEDON / RUMIT / BOROS (Gaming, Shopping, Top-up Game, Nongkrong, Cafe, Fomo, Barang Mewah, dsb):
+   - Boleh bertindak kocak, bernada sarkas halus, julit menghibur atau menegur pengguna agar ingat budget.
+
+ATURAN PENULISAN:
+- Maksimal 120 karakter.
+- DILARANG pakai format template yang monoton.
+- Langsung berikan teks balasannya saja, tanpa tanda kutip.`;
 
     try {
       const aiResponse = await aiManager.chat([{ role: "user", content: prompt }]);
@@ -107,7 +122,7 @@ ATURAN SUPER KETAT:
         console.log(`[Worker:Cron] Mengirim peringatan real-time ke ${userName}: ${messageText}`);
         await sendPushNotification({
           userIds: [userId],
-          title: "Peringatan Pengeluaran Besar 🚨",
+          title: "Informasi Transaksi 💸",
           body: messageText,
           clickAction: "/dashboard",
           type: "EXPENSE_ALERT",
@@ -132,7 +147,7 @@ ATURAN SUPER KETAT:
     } = job.data;
 
     console.log(
-      `[Worker:Cron] Memproses budget-limit-exceeded-alert #${job.id} untuk user ${userId}`
+      `[Worker:Cron] Memproses budget-limit-exceeded-alert #${job.id} me-refer user ${userId}`
     );
 
     const periodLabelMap: Record<string, string> = {
@@ -143,18 +158,20 @@ ATURAN SUPER KETAT:
     };
     const periodStr = periodLabelMap[period] || "Bulanan";
 
-    const prompt = `Kamu adalah Catatin AI, asisten keuangan pintar, ekspresif, dan tidak ragu menegur pengguna.
-Tugasmu: Tegur ${userName || "User"} karena total pengeluaran ${periodStr} untuk "${categoryName}" SUDAH MELEBIHI TARGET BUDGET!
+    const prompt = `Kamu adalah Catatin AI, asisten keuangan pintar, ekspresif, dan santun.
+Tugasmu: Berikan notifikasi untuk ${userName || "User"} karena total pengeluaran ${periodStr} untuk "${categoryName}" SUDAH MELEBIHI TARGET BUDGET!
 Detail:
 - Periode Budget: ${periodStr}
 - Target Budget: Rp ${Number(budgetAmount).toLocaleString("id-ID")}
 - Total Terpakai Saat Ini: Rp ${Number(currentSpent).toLocaleString("id-ID")}
 - Transaksi Terakhir: Rp ${Number(latestTxAmount).toLocaleString("id-ID")} ("${latestDescription}")
 
-Instruksi:
-- Buat Push Notification (maksimal 120 huruf) yang langsung menegur, lucu/sarkas/mengingatkan dengan gaya santai & gaul.
-- Gunakan bahasa yang BERVARIASI (misal: "Waduh", "Woy", "Awas sultan", "Rem woi!", "Overbudget bor!").
-- JANGAN kaku seperti robot bank.
+Instruksi PENTING:
+- Buat Push Notification (maksimal 120 huruf).
+- ATURAN KATEGORI & INTENT TRANSAKSI:
+  1. Jika kategori/deskripsi transaksi terkait KEGIATAN KEBAIKAN (Infaq, Amal, Sedekah, Zakat, Donasi) atau BAKTI ORANG TUA/KELUARGA: PERTAHANKAN PUJIAN & RASA HORMAT. Acknowledge kebaikan pengeluarannya dengan doa/apresiasi mulia, sambil ingatkan arus kas secara bijak & halus. DILARANG MENYINDIR ATAU OMELI NYOLOT!
+  2. Jika terkait KEWAJIBAN POKOK (Kos, Kontrakan, Pendidikan, SPP): Acknowledge sebagai kebutuhan utama yang penting, beri pengingat ramah untuk atur pos pengeluaran lain.
+  3. Jika terkait pengeluaran konsumtif/hedon/rutin: Tegur dengan gaya santai, lucu/sarkas halus atau mengingatkan secara gaul ("Awas sultan", "Rem woi!", "Overbudget bor!").
 - Langsung to the point, hanya balas teks notifikasinya saja tanpa tanda kutip.`;
 
     try {

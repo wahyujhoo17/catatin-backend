@@ -1819,6 +1819,7 @@ export async function buildFinancialContext(
           ? `- User minta grafik: akhiri dengan ${chartTag}.\n`
           : "") +
         "- Nada: ramah, SESUAIKAN dengan kondisi DATA:\n" +
+        "  * Jika pengeluaran mencakup amal, infaq, sedekah, zakat, bakti orang tua, atau bayar kos/pendidikan → selalu apresiatif dan puji kebaikannya; jangan menyindir sebagai boros konsumtif.\n" +
         "  * Pengeluaran wajar → santai.\n" +
         "  * Pengeluaran > pemasukan → ingatkan dengan sopan, beri tips hemat.\n" +
         "  * JANGAN bilang 'Masih aman' kalau defisit.\n\n" +

@@ -4,6 +4,8 @@ import { authMiddleware } from "../middleware/auth";
 import { aiManager } from "../lib/ai/providerManager";
 import { getDateParts, createDateInTimeZone } from "../lib/timezone";
 
+import { getFinancialMonthlyRange } from "../lib/financialCycle";
+
 const dashboard = new Hono();
 dashboard.use("*", authMiddleware);
 
@@ -11,16 +13,16 @@ dashboard.use("*", authMiddleware);
 dashboard.get("/summary", async (c) => {
   const { userId } = c.get("user");
 
-  // Rentang bulan ini
+  const userDbForCycle = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { financialCycleStartDay: true },
+  });
+
+  // Rentang bulan ini berdasarkan tanggal reset siklus keuangan (gajian)
   const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const endOfMonth = new Date(
-    now.getFullYear(),
-    now.getMonth() + 1,
-    0,
-    23,
-    59,
-    59,
+  const { start: startOfMonth, end: endOfMonth } = getFinancialMonthlyRange(
+    now,
+    userDbForCycle?.financialCycleStartDay ?? 1
   );
 
   // ─── Total saldo dari semua akun ─────────────────────────────

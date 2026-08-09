@@ -11,6 +11,8 @@ import {
   endOfYear,
 } from "date-fns";
 
+import { getFinancialMonthlyRange } from "../lib/financialCycle";
+
 /**
  * Memeriksa apakah transaksi pengeluaran melampaui alertThreshold per-transaksi
  * atau melebihi Target Budget Kumulatif (DAILY, WEEKLY, MONTHLY, YEARLY).
@@ -24,7 +26,7 @@ export async function checkAndTriggerBudgetAlerts(
   try {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { name: true, customAiConfig: true },
+      select: { name: true, customAiConfig: true, financialCycleStartDay: true },
     });
 
     if (!user) return;
@@ -86,10 +88,12 @@ export async function checkAndTriggerBudgetAlerts(
           endDate = endOfYear(now);
           break;
         case "MONTHLY":
-        default:
-          startDate = startOfMonth(now);
-          endDate = endOfMonth(now);
+        default: {
+          const monthlyRange = getFinancialMonthlyRange(now, user.financialCycleStartDay || 1);
+          startDate = monthlyRange.start;
+          endDate = monthlyRange.end;
           break;
+        }
       }
 
       // Hitung akumulasi pengeluaran pada rentang waktu budget ini

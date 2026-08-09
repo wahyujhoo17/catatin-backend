@@ -5,6 +5,8 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear, startOfDay, endOfDay } from "date-fns";
 
+import { getFinancialMonthlyRange } from "../lib/financialCycle";
+
 const budgets = new Hono();
 budgets.use("*", authMiddleware);
 
@@ -21,6 +23,12 @@ budgets.get("/", async (c) => {
   const userId = user.userId;
 
   try {
+    const userDb = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { financialCycleStartDay: true },
+    });
+    const cycleStartDay = userDb?.financialCycleStartDay ?? 1;
+
     const activeBudgets = await prisma.budget.findMany({
       where: { userId },
       include: { category: true }
@@ -47,10 +55,12 @@ budgets.get("/", async (c) => {
           endDate = endOfYear(now);
           break;
         case "MONTHLY":
-        default:
-          startDate = startOfMonth(now);
-          endDate = endOfMonth(now);
+        default: {
+          const monthlyRange = getFinancialMonthlyRange(now, cycleStartDay);
+          startDate = monthlyRange.start;
+          endDate = monthlyRange.end;
           break;
+        }
       }
 
       const aggregate = await prisma.transaction.aggregate({

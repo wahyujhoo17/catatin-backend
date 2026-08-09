@@ -14,6 +14,7 @@ import {
   validateAiToolCall,
 } from "../lib/ai/actionRequests";
 import { formatAiHistoryMessage } from "../lib/ai/actionHistory";
+import { getFinancialMonthlyRange } from "../lib/financialCycle";
 import {
   chatRequestSchema,
   syncChatRequestSchema,
@@ -1223,8 +1224,14 @@ export async function buildFinancialContext(
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const timeContext = `Informasi Waktu: Hari ini adalah hari ${dayName}, tanggal ${todayStr}.\n\n`;
 
+  const userCycleDb = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { financialCycleStartDay: true },
+  });
+  const cycleStartDay = userCycleDb?.financialCycleStartDay ?? 1;
+
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const { start: startOfMonth } = getFinancialMonthlyRange(now, cycleStartDay);
 
   // ─── Tentukan rentang efektif ────────────────────────────
   const range: TimeRange = timeRange || {

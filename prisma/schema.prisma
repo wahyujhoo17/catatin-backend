@@ -26,6 +26,7 @@ model User {
   customAiConfig     Json?
   aiInsight          String?
   aiInsightUpdatedAt DateTime?
+  financialCycleStartDay Int        @default(1)
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
 

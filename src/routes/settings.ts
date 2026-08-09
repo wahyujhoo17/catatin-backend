@@ -510,4 +510,40 @@ settingsRoutes.post("/profile/confirm-change", async (c) => {
   });
 });
 
+// ─── GET /api/settings/preferences ─────────────────────────────
+settingsRoutes.get("/preferences", async (c) => {
+  const user = c.get("user");
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { financialCycleStartDay: true },
+  });
+
+  return c.json({
+    financialCycleStartDay: dbUser?.financialCycleStartDay ?? 1,
+  });
+});
+
+// ─── PATCH /api/settings/preferences ───────────────────────────
+settingsRoutes.patch("/preferences", async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json();
+  const { financialCycleStartDay } = body;
+
+  const dayNum = Number(financialCycleStartDay);
+  if (!Number.isInteger(dayNum) || dayNum < 1 || dayNum > 28) {
+    return c.json({ error: "Tanggal reset siklus keuangan harus antara 1 dan 28" }, 400);
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: user.userId },
+    data: { financialCycleStartDay: dayNum },
+    select: { financialCycleStartDay: true },
+  });
+
+  return c.json({
+    message: "Preferensi siklus keuangan berhasil diperbarui",
+    financialCycleStartDay: updated.financialCycleStartDay,
+  });
+});
+
 export default settingsRoutes;

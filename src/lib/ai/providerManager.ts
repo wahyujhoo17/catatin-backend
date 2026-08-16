@@ -65,7 +65,7 @@ function getProviderOrder(
 ): ProviderName[] {
   let order: ProviderName[];
   if (vision || reliability === "vision") {
-    order = ["gemini", "groq", "openrouter"];
+    order = ["groq", "gemini", "openrouter"];
   } else if (reliability === "tool") {
     order = ["cerebras", "gemini", "deepseek", "sambanova"];
   } else if (reliability === "json") {

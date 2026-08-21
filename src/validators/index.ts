@@ -73,6 +73,8 @@ export const createTransactionSchema = z.object({
     .nullable(),
 });
 
+export const updateTransactionSchema = createTransactionSchema.partial();
+
 // ─── ACCOUNT VALIDATORS ───────────────────────────────────────
 
 export const createAccountSchema = z.object({
@@ -85,22 +87,28 @@ export const createAccountSchema = z.object({
 
 export const createProductSchema = z.object({
   name: z.string().min(1, "Nama produk wajib diisi"),
+  sku: z.string().trim().max(80).optional().nullable(),
+  barcode: z.string().trim().max(120).optional().nullable(),
   price: z.number().positive("Harga harus lebih dari 0"),
-  costPrice: z.number().optional(),
-  category: z.string().optional(),
-  unit: z.string().default("pcs"),
-  stock: z.number().int().default(0),
-  minStock: z.number().int().default(5),
+  costPrice: z.number().nonnegative().optional().nullable(),
+  category: z.string().trim().max(80).optional().nullable(),
+  unit: z.string().trim().min(1).max(30).default("pcs"),
+  stock: z.number().nonnegative().default(0),
+  minStock: z.number().nonnegative().default(5),
+  image: z.string().url().max(2000).optional().nullable(),
 });
 
 export const updateProductSchema = z.object({
   name: z.string().min(1, "Nama produk wajib diisi").optional(),
+  sku: z.string().trim().max(80).optional().nullable(),
+  barcode: z.string().trim().max(120).optional().nullable(),
   price: z.number().positive("Harga harus lebih dari 0").optional(),
-  costPrice: z.number().optional().nullable(),
-  category: z.string().optional().nullable(),
-  unit: z.string().optional(),
-  stock: z.number().int().optional(),
-  minStock: z.number().int().optional(),
+  costPrice: z.number().nonnegative().optional().nullable(),
+  category: z.string().trim().max(80).optional().nullable(),
+  unit: z.string().trim().min(1).max(30).optional(),
+  stock: z.number().nonnegative().optional(),
+  minStock: z.number().nonnegative().optional(),
+  image: z.string().url().max(2000).optional().nullable(),
   isActive: z.boolean().optional(),
 });
 
@@ -108,7 +116,11 @@ export const updateProductSchema = z.object({
 
 export const createCustomerSchema = z.object({
   name: z.string().min(1, "Nama pelanggan wajib diisi"),
-  phone: z.string().optional(),
+  phone: z.string().trim().max(30).optional().nullable(),
   maxDebt: z.number().positive().optional(),
-  notes: z.string().optional(),
+  notes: z.string().trim().max(1000).optional().nullable(),
+});
+
+export const updateCustomerSchema = createCustomerSchema.partial().extend({
+  isActive: z.boolean().optional(),
 });

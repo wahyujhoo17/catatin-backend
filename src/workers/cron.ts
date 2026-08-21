@@ -5,6 +5,65 @@ import { aiManager } from "../lib/ai/providerManager";
 import { buildDailyRecapExpenseWhere } from "../lib/dailyRecap";
 
 export function startCronWorker(): void {
+  cronQueue.process("pos-daily-recap", async (job) => {
+    console.log(`[Worker:Cron] Memproses pos-daily-recap #${job.id}`);
+    const users = await prisma.user.findMany({
+      where: { mode: "POS", deviceTokens: { some: {} } },
+      select: { id: true },
+    });
+    const end = new Date();
+    const start = new Date(end);
+    start.setHours(0, 0, 0, 0);
+    const overdueBefore = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    for (const user of users) {
+      const [sales, payments, debt, overdueCustomers] = await Promise.all([
+        prisma.sale.aggregate({
+          where: { userId: user.id, status: "COMPLETED", createdAt: { gte: start, lte: end } },
+          _sum: { total: true },
+          _count: { _all: true },
+        }),
+        prisma.salePayment.aggregate({
+          where: { sale: { userId: user.id }, method: { not: "CREDIT" }, createdAt: { gte: start, lte: end } },
+          _sum: { amount: true },
+        }),
+        prisma.customer.aggregate({ where: { userId: user.id, isActive: true }, _sum: { debt: true } }),
+        prisma.customer.findMany({
+          where: {
+            userId: user.id,
+            isActive: true,
+            debt: { gt: 0 },
+            sales: { some: { status: "COMPLETED", outstandingAmount: { gt: 0 }, createdAt: { lte: overdueBefore } } },
+          },
+          select: { name: true, debt: true },
+          take: 5,
+          orderBy: { debt: "desc" },
+        }),
+      ]);
+
+      if (sales._count._all > 0) {
+        await sendPushNotification({
+          userIds: [user.id],
+          type: "POS_DAILY_RECAP",
+          title: "Ringkasan usaha hari ini",
+          body: `${sales._count._all} transaksi • Penjualan Rp${Number(sales._sum.total || 0).toLocaleString("id-ID")} • Uang masuk Rp${Number(payments._sum.amount || 0).toLocaleString("id-ID")} • Kasbon Rp${Number(debt._sum.debt || 0).toLocaleString("id-ID")}`,
+          clickAction: "/dashboard/pos?tab=reports",
+        });
+      }
+
+      if (overdueCustomers.length > 0) {
+        const names = overdueCustomers.map((customer) => customer.name).join(", ");
+        await sendPushNotification({
+          userIds: [user.id],
+          type: "POS_DEBT",
+          title: "Kasbon lebih dari 30 hari",
+          body: `${names} masih memiliki kasbon lama. Buka daftar kasbon untuk menindaklanjuti.`,
+          clickAction: "/dashboard/pos?tab=customers",
+        });
+      }
+    }
+  });
+
   cronQueue.process("daily-ai-alert", async (job) => {
     console.log(`[Worker:Cron] Memproses daily-ai-alert #${job.id}`);
 
@@ -267,6 +326,16 @@ Instruksi PENTING:
 }
 
 export async function registerCronJobs(): Promise<void> {
+  // Rekap POS dan pengingat kasbon lama setiap pukul 21.00 WIB.
+  await cronQueue.add(
+    "pos-daily-recap",
+    {},
+    {
+      repeat: { cron: "0 21 * * *", tz: "Asia/Jakarta" },
+      jobId: "pos-daily-recap-job",
+    },
+  );
+
   // Evaluasi pengeluaran setiap jam 20:00
   await cronQueue.add(
     "daily-ai-alert",

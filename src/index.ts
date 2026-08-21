@@ -22,6 +22,8 @@ import dashboardRoutes from "./routes/dashboard";
 import deviceRoutes from "./routes/device";
 import goalRoutes from "./routes/goal";
 import notificationRoutes from "./routes/notification";
+import customerRoutes from "./routes/customer";
+import posRoutes from "./routes/pos";
 
 const app = new Hono();
 
@@ -89,6 +91,8 @@ app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/auth/device-token", deviceRoutes);
 app.route("/api/goals", goalRoutes);
 app.route("/api/notifications", notificationRoutes);
+app.route("/api/customers", customerRoutes);
+app.route("/api/pos", posRoutes);
 
 // ─── START ────────────────────────────────────────────────────
 const port = parseInt(process.env.PORT || "4000");

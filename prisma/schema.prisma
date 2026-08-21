@@ -15,38 +15,43 @@ enum WorkspaceMode {
 }
 
 model User {
-  id                 String         @id @default(cuid())
-  email              String         @unique
-  googleId           String?        @unique
-  phone              String?        @unique
-  password           String?
-  name               String
-  mode               WorkspaceMode?
-  avatar             String?
-  customAiConfig     Json?
-  aiInsight          String?
-  aiInsightUpdatedAt DateTime?
-  financialCycleStartDay Int        @default(1)
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  id                     String         @id @default(cuid())
+  email                  String         @unique
+  googleId               String?        @unique
+  phone                  String?        @unique
+  password               String?
+  name                   String
+  mode                   WorkspaceMode?
+  avatar                 String?
+  customAiConfig         Json?
+  aiInsight              String?
+  aiInsightUpdatedAt     DateTime?
+  financialCycleStartDay Int            @default(1)
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
 
   // Relations
-  otpCodes         OtpCode[]
-  sessions         Session[]
-  accounts         Account[]
-  transactions     Transaction[]
-  categories       Category[]
-  products         Product[]
-  customers        Customer[]
-  aiMessages       AiMessage[]
-  aiConversations  AiConversation[]
-  deviceTokens     DeviceToken[]
-  subscriptions    Subscription[]
-  budgets          Budget[]
-  investmentAssets InvestmentAsset[]
-  savingGoals      SavingGoal[]
-  notifications    Notification[]
-  aiActionRequests AiActionRequest[]
+  otpCodes          OtpCode[]
+  sessions          Session[]
+  accounts          Account[]
+  transactions      Transaction[]
+  categories        Category[]
+  products          Product[]
+  customers         Customer[]
+  aiMessages        AiMessage[]
+  aiConversations   AiConversation[]
+  deviceTokens      DeviceToken[]
+  subscriptions     Subscription[]
+  budgets           Budget[]
+  investmentAssets  InvestmentAsset[]
+  savingGoals       SavingGoal[]
+  notifications     Notification[]
+  aiActionRequests  AiActionRequest[]
+  posProfile        PosProfile?
+  sales             Sale[]
+  stockMovements    StockMovement[]
+  registerSessions  RegisterSession[]
+  receivableEntries ReceivableEntry[]
 }
 
 // ─── NOTIFICATION TYPES ─────────────────────────────────────────
@@ -58,6 +63,10 @@ enum NotificationType {
   DAILY_RECAP
   ADMIN_BROADCAST
   SYSTEM
+  POS_DEBT
+  POS_DEBT_PAYMENT
+  POS_LOW_STOCK
+  POS_DAILY_RECAP
 }
 
 model Notification {
@@ -197,19 +206,26 @@ model Category {
 model Product {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
-  price     Float
-  costPrice Float?
+  sku       String?
+  barcode   String?
+  price     Decimal  @db.Decimal(18, 2)
+  costPrice Decimal? @db.Decimal(18, 2)
   category  String?
   unit      String   @default("pcs")
-  stock     Int      @default(0)
-  minStock  Int      @default(5)
+  stock     Decimal  @default(0) @db.Decimal(18, 3)
+  minStock  Decimal  @default(5) @db.Decimal(18, 3)
   image     String?
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  saleItems      SaleItem[]
+  stockMovements StockMovement[]
+
+  @@unique([userId, sku])
+  @@unique([userId, barcode])
   @@index([userId])
   @@index([userId, isActive])
 }
@@ -219,19 +235,195 @@ model Product {
 model Customer {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
   phone     String?
-  debt      Float    @default(0)
-  maxDebt   Float?
+  debt      Decimal  @default(0) @db.Decimal(18, 2)
+  maxDebt   Decimal? @db.Decimal(18, 2)
   notes     String?
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   transactions Transaction[]
+  sales        Sale[]
+  receivables  ReceivableEntry[]
 
   @@index([userId])
+}
+
+// ─── POS: SALES, PAYMENTS, INVENTORY & RECEIVABLES ──────────────
+
+enum SaleStatus {
+  COMPLETED
+  VOIDED
+}
+
+enum PosPaymentMethod {
+  CASH
+  BANK_TRANSFER
+  E_WALLET
+  CARD
+  CREDIT
+}
+
+enum StockMovementType {
+  INITIAL
+  PURCHASE
+  SALE
+  ADJUSTMENT
+  RETURN
+  VOID
+}
+
+enum ReceivableEntryType {
+  CHARGE
+  PAYMENT
+  ADJUSTMENT
+  VOID
+}
+
+enum RegisterStatus {
+  OPEN
+  CLOSED
+}
+
+model PosProfile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessName  String   @default("Usaha Saya")
+  address       String?
+  phone         String?
+  receiptFooter String?
+  taxPercent    Decimal  @default(0) @db.Decimal(5, 2)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model RegisterSession {
+  id           String         @id @default(cuid())
+  userId       String
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status       RegisterStatus @default(OPEN)
+  openingCash  Decimal        @default(0) @db.Decimal(18, 2)
+  expectedCash Decimal?       @db.Decimal(18, 2)
+  closingCash  Decimal?       @db.Decimal(18, 2)
+  notes        String?
+  openedAt     DateTime       @default(now())
+  closedAt     DateTime?
+  sales        Sale[]
+  payments     SalePayment[]
+
+  @@index([userId, status])
+  @@index([userId, openedAt])
+}
+
+model Sale {
+  id                String            @id @default(cuid())
+  userId            String
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId        String?
+  customer          Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  registerSessionId String?
+  registerSession   RegisterSession?  @relation(fields: [registerSessionId], references: [id], onDelete: SetNull)
+  invoiceNumber     String            @unique
+  idempotencyKey    String
+  status            SaleStatus        @default(COMPLETED)
+  subtotal          Decimal           @db.Decimal(18, 2)
+  discount          Decimal           @default(0) @db.Decimal(18, 2)
+  tax               Decimal           @default(0) @db.Decimal(18, 2)
+  total             Decimal           @db.Decimal(18, 2)
+  paidAmount        Decimal           @default(0) @db.Decimal(18, 2)
+  creditAmount      Decimal           @default(0) @db.Decimal(18, 2)
+  outstandingAmount Decimal           @default(0) @db.Decimal(18, 2)
+  changeAmount      Decimal           @default(0) @db.Decimal(18, 2)
+  notes             String?
+  voidReason        String?
+  voidedAt          DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  items             SaleItem[]
+  payments          SalePayment[]
+  stockMovements    StockMovement[]
+  receivables       ReceivableEntry[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([userId, status])
+  @@index([customerId, outstandingAmount])
+}
+
+model SaleItem {
+  id          String   @id @default(cuid())
+  saleId      String
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName String
+  sku         String?
+  quantity    Decimal  @db.Decimal(18, 3)
+  unit        String
+  unitPrice   Decimal  @db.Decimal(18, 2)
+  unitCost    Decimal  @default(0) @db.Decimal(18, 2)
+  subtotal    Decimal  @db.Decimal(18, 2)
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+model SalePayment {
+  id                String           @id @default(cuid())
+  saleId            String
+  sale              Sale             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  registerSessionId String?
+  registerSession   RegisterSession? @relation(fields: [registerSessionId], references: [id], onDelete: SetNull)
+  method            PosPaymentMethod
+  amount            Decimal          @db.Decimal(18, 2)
+  reference         String?
+  createdAt         DateTime         @default(now())
+
+  @@index([saleId])
+  @@index([registerSessionId, createdAt])
+}
+
+model StockMovement {
+  id          String            @id @default(cuid())
+  userId      String
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  saleId      String?
+  sale        Sale?             @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  type        StockMovementType
+  quantity    Decimal           @db.Decimal(18, 3)
+  stockBefore Decimal           @db.Decimal(18, 3)
+  stockAfter  Decimal           @db.Decimal(18, 3)
+  note        String?
+  createdAt   DateTime          @default(now())
+
+  @@index([userId, createdAt])
+  @@index([productId, createdAt])
+  @@index([saleId])
+}
+
+model ReceivableEntry {
+  id         String              @id @default(cuid())
+  userId     String
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   Customer            @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  saleId     String?
+  sale       Sale?               @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  type       ReceivableEntryType
+  amount     Decimal             @db.Decimal(18, 2)
+  method     PosPaymentMethod?
+  note       String?
+  createdAt  DateTime            @default(now())
+
+  @@index([userId, createdAt])
+  @@index([customerId, createdAt])
+  @@index([saleId])
 }
 
 // ─── SUBSCRIPTIONS & RECURRING BILLS ────────────────────────────

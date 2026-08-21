@@ -11,7 +11,7 @@ export interface PushNotificationPayload {
   icon?: string;
   clickAction?: string; // URL yang dibuka saat notifikasi diklik (default: /dashboard)
   data?: Record<string, string>;
-  type?: "EXPENSE_ALERT" | "BUDGET_EXCEEDED" | "SUBSCRIPTION_REMINDER" | "DAILY_RECAP" | "ADMIN_BROADCAST" | "SYSTEM";
+  type?: "EXPENSE_ALERT" | "BUDGET_EXCEEDED" | "SUBSCRIPTION_REMINDER" | "DAILY_RECAP" | "ADMIN_BROADCAST" | "SYSTEM" | "POS_DEBT" | "POS_DEBT_PAYMENT" | "POS_LOW_STOCK" | "POS_DAILY_RECAP";
 }
 
 // ─── Persist notification to database ────────────────────────
@@ -93,7 +93,7 @@ export async function sendPushNotificationDirect(
     const message = {
       webpush: {
         fcmOptions: {
-          link: "/notifications?openLatest=1",
+          link: payload.clickAction || "/notifications?openLatest=1",
         },
         notification: {
           title: payload.title,
@@ -109,7 +109,7 @@ export async function sendPushNotificationDirect(
       },
       data: {
         ...(payload.data || {}),
-        click_action: "/notifications?openLatest=1",
+        click_action: payload.clickAction || "/notifications?openLatest=1",
       },
       tokens,
     };
